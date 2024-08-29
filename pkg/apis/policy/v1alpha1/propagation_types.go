@@ -500,6 +500,19 @@ const (
 	//     C: Max available replica: 18
 	//   The weight of cluster A:B:C will be 6:12:18 (equals to 1:2:3). At last, the assignment would be 'A: 2, B: 4, C: 6'.
 	DynamicWeightByAvailableReplicas DynamicWeightFactor = "AvailableReplicas"
+
+	// DynamicWeightByEstimatorCalculatedReplicas represents the cluster weight list must be matched to
+	// estimated calculated replicas and this algorithm will not influenced by historical cluster weight data.
+	// Example:
+	//   The scheduler selected 3 clusters (A/B/C) and should divide 12 replicas to them.
+	//   Workload:
+	//     Desired replica: 12
+	//   Cluster:
+	//     A: Estimated calculated replica: 0
+	//     B: Estimated calculated replica: 50
+	//     C: Estimated calculated replica: 50
+	//   The weight of cluster A:B:C will be 0:50:50 (equals to 0:1:1). At last, the assignment would be 'A: 0, B: 50, C: 50'.
+	DynamicWeightByEstimatorCalculatedReplicas DynamicWeightFactor = "EstimatorCalculatedReplicas"
 )
 
 // PreemptionBehavior describes whether and how to preempt resources that are

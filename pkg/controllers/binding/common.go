@@ -77,7 +77,7 @@ func ensureWork(
 
 		workNamespace := names.GenerateExecutionSpaceName(targetCluster.Name)
 		// add cluster name to the workload's annotation
-		util.ReplaceAnnotation(clonedWorkload, util.ClusterNameAnnotation, targetCluster.Name)
+		util.MergeAnnotation(clonedWorkload, util.ClusterNameAnnotation, targetCluster.Name)
 
 		// If and only if the resource template has replicas, and the replica scheduling policy is divided,
 		// we need to revise replicas.

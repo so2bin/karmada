@@ -206,34 +206,39 @@ func assignByStaticWeightStrategy(state *assignState) ([]workv1alpha2.TargetClus
 }
 
 func assignByDynamicStrategy(state *assignState) ([]workv1alpha2.TargetCluster, error) {
-	state.buildScheduledClusters()
+	switch state.strategy.WeightPreference.DynamicWeight {
+	case policyv1alpha1.DynamicWeightByEstimatorCalculatedReplicas:
+		return assignByStaticWeightStrategy(state)
+	default:
+		state.buildScheduledClusters()
 
-	// 1. when Fresh mode expected, do a complete recalculation without referring to the last scheduling results.
-	if state.assignmentMode == Fresh {
-		result, err := dynamicFreshScale(state)
-		if err != nil {
-			return nil, fmt.Errorf("failed to do fresh scale: %v", err)
+		// 1. when Fresh mode expected, do a complete recalculation without referring to the last scheduling results.
+		if state.assignmentMode == Fresh {
+			result, err := dynamicFreshScale(state)
+			if err != nil {
+				return nil, fmt.Errorf("failed to do fresh scale: %v", err)
+			}
+			return result, nil
 		}
-		return result, nil
+
+		// 2. when Steady mode expected, try minimizing large changes in scheduling results.
+		if state.assignedReplicas > state.spec.Replicas {
+			// We need to reduce the replicas in terms of the previous result.
+			result, err := dynamicScaleDown(state)
+			if err != nil {
+				return nil, fmt.Errorf("failed to scale down: %v", err)
+			}
+			return result, nil
+		} else if state.assignedReplicas < state.spec.Replicas {
+			// We need to enlarge the replicas in terms of the previous result (if exists).
+			// First scheduling is considered as a special kind of scaling up.
+			result, err := dynamicScaleUp(state)
+			if err != nil {
+				return nil, fmt.Errorf("failed to scale up: %v", err)
+			}
+			return result, nil
+		}
+
+		return state.scheduledClusters, nil
 	}
-
-	// 2. when Steady mode expected, try minimizing large changes in scheduling results.
-	if state.assignedReplicas > state.spec.Replicas {
-		// We need to reduce the replicas in terms of the previous result.
-		result, err := dynamicScaleDown(state)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scale down: %v", err)
-		}
-		return result, nil
-	} else if state.assignedReplicas < state.spec.Replicas {
-		// We need to enlarge the replicas in terms of the previous result (if exists).
-		// First scheduling is considered as a special kind of scaling up.
-		result, err := dynamicScaleUp(state)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scale up: %v", err)
-		}
-		return result, nil
-	}
-
-	return state.scheduledClusters, nil
 }
