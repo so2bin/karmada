@@ -78,13 +78,18 @@ type ObjectReference struct {
 	Kind string `json:"kind"`
 
 	// Name of the target resource.
-	// +required
-	Name string `json:"name"`
+	// +optional
+	Name string `json:"name,omitempty"`
 
 	// Namespace of the target resource.
 	// Default is empty, which means it is a non-namespacescoped resource.
 	// +optional
 	Namespace string `json:"namespace,omitempty"`
+
+	// A label query over a set of resources.
+	// If name is not empty, labelSelector will be ignored.
+	// +optional
+	LabelSelector *metav1.LabelSelector `json:"labelSelector,omitempty"`
 }
 
 // WorkloadRebalancerStatus contains information about the current status of a WorkloadRebalancer
