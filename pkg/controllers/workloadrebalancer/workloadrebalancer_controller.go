@@ -21,7 +21,12 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
+
 	"time"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -121,7 +126,22 @@ func (c *RebalancerController) syncWorkloadsFromSpecToStatus(rebalancer *appsv1a
 
 	specWorkloadSet := sets.New[appsv1alpha1.ObjectReference]()
 	for _, workload := range rebalancer.Spec.Workloads {
-		specWorkloadSet.Insert(workload)
+		if workload.Name != "" {
+			specWorkloadSet.Insert(workload)
+		} else {
+			workloadsSelectByRs := []appsv1alpha1.ObjectReference{}
+
+			selectedWorkloads, err := c.getResourcesBySelector(workload)
+			if err != nil {
+				klog.Errorf("Failed to get resources by label selector %+v %+v, : %v", workload, workload.LabelSelector, err)
+				continue
+			}
+			klog.Infof("Selected %d workloads by ResourceSelector %+v %+v", len(selectedWorkloads), workload, workload.LabelSelector)
+			workloadsSelectByRs = append(workloadsSelectByRs, selectedWorkloads...)
+			for _, workload := range workloadsSelectByRs {
+				specWorkloadSet.Insert(workload)
+			}
+		}
 	}
 
 	for _, item := range rebalancer.Status.ObservedWorkloads {
@@ -297,4 +317,66 @@ func timeLeft(r *appsv1alpha1.WorkloadRebalancer) time.Duration {
 
 	klog.V(4).Infof("Found Rebalancer(%s) finished at: %+v, remainingTTL: %+v", r.Name, r.Status.FinishTime.UTC(), remainingTTL)
 	return remainingTTL
+}
+
+func (c *RebalancerController) getResourcesBySelector(workload appsv1alpha1.ObjectReference) ([]appsv1alpha1.ObjectReference, error) {
+	gvk := schema.GroupVersionKind{
+		Group:   getGroupFromAPIVersion(workload.APIVersion),
+		Version: getVersionFromAPIVersion(workload.APIVersion),
+		Kind:    workload.Kind,
+	}
+
+	resource := &unstructured.UnstructuredList{}
+	resource.SetGroupVersionKind(gvk)
+
+	var labelSelector client.MatchingLabels
+	if workload.LabelSelector != nil {
+		labelSelector = workload.LabelSelector.MatchLabels
+	}
+
+	listOptions := []client.ListOption{}
+	if workload.Namespace != "" {
+		listOptions = append(listOptions, client.InNamespace(workload.Namespace))
+	}
+
+	if labelSelector != nil {
+		listOptions = append(listOptions, client.MatchingLabels(labelSelector))
+	}
+
+	err := c.Client.List(context.TODO(), resource, listOptions...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list resources: %v", err)
+	}
+
+	return convertToWorkloadReferences(resource.Items), nil
+}
+
+func convertToWorkloadReferences(items []unstructured.Unstructured) []appsv1alpha1.ObjectReference {
+	workloadRefs := make([]appsv1alpha1.ObjectReference, 0, len(items))
+	for _, item := range items {
+		ref := appsv1alpha1.ObjectReference{
+			APIVersion: item.GetAPIVersion(),
+			Kind:       item.GetKind(),
+			Name:       item.GetName(),
+			Namespace:  item.GetNamespace(),
+		}
+		workloadRefs = append(workloadRefs, ref)
+	}
+	return workloadRefs
+}
+
+func getGroupFromAPIVersion(apiVersion string) string {
+	parts := strings.Split(apiVersion, "/")
+	if len(parts) == 1 {
+		return ""
+	}
+	return parts[0]
+}
+
+func getVersionFromAPIVersion(apiVersion string) string {
+	parts := strings.Split(apiVersion, "/")
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	return parts[1]
 }
