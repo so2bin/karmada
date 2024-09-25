@@ -466,7 +466,7 @@ type ClusterPreferences struct {
 	StaticWeightList []StaticClusterWeight `json:"staticWeightList,omitempty"`
 	// DynamicWeight specifies the factor to generates dynamic weight list.
 	// If specified, StaticWeightList will be ignored.
-	// +kubebuilder:validation:Enum=AvailableReplicas
+	// +kubebuilder:validation:Enum=AvailableReplicas;FreshReplicas
 	// +optional
 	DynamicWeight DynamicWeightFactor `json:"dynamicWeight,omitempty"`
 }
@@ -501,18 +501,23 @@ const (
 	//   The weight of cluster A:B:C will be 6:12:18 (equals to 1:2:3). At last, the assignment would be 'A: 2, B: 4, C: 6'.
 	DynamicWeightByAvailableReplicas DynamicWeightFactor = "AvailableReplicas"
 
-	// DynamicWeightByEstimatorCalculatedReplicas represents the cluster weight list must be matched to
-	// estimated calculated replicas and this algorithm will not influenced by historical cluster weight data.
+	// DynamicWeightByFreshReplicas represents a cluster weight list that is determined solely based on
+	// the estimated calculated replicas, without being influenced by any previous cluster weight data.
+	// This algorithm aligns with the "Fresh" assignment mode, meaning it disregards historical replica distributions
+	// and aims to generate a completely new distribution across clusters. It prioritizes calculated replica needs,
+	// even if it results in significant shifts in assignment.
+	//
 	// Example:
-	//   The scheduler selected 3 clusters (A/B/C) and should divide 12 replicas to them.
+	//   The scheduler selected 3 clusters (A/B/C) and needs to distribute 12 replicas among them.
 	//   Workload:
-	//     Desired replica: 12
+	//     Desired replicas: 12
 	//   Cluster:
-	//     A: Estimated calculated replica: 0
-	//     B: Estimated calculated replica: 50
-	//     C: Estimated calculated replica: 50
-	//   The weight of cluster A:B:C will be 0:50:50 (equals to 0:1:1). At last, the assignment would be 'A: 0, B: 50, C: 50'.
-	DynamicWeightByEstimatorCalculatedReplicas DynamicWeightFactor = "EstimatorCalculatedReplicas"
+	//     A: Estimated calculated replicas: 0
+	//     B: Estimated calculated replicas: 50
+	//     C: Estimated calculated replicas: 50
+	//   Based on this estimation, the weight for clusters A:B:C will be 0:50:50 (equal to 0:1:1).
+	//   Therefore, the assignment will be 'A: 0, B: 50, C: 50'.
+	DynamicWeightByFreshReplicas DynamicWeightFactor = "FreshReplicas"
 )
 
 // PreemptionBehavior describes whether and how to preempt resources that are

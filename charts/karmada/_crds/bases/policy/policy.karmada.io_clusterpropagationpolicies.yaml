@@ -491,6 +491,7 @@ spec:
                               If specified, StaticWeightList will be ignored.
                             enum:
                             - AvailableReplicas
+                            - FreshReplicas
                             type: string
                           staticWeightList:
                             description: StaticWeightList defines the static cluster
