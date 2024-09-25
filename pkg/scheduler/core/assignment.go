@@ -207,8 +207,8 @@ func assignByStaticWeightStrategy(state *assignState) ([]workv1alpha2.TargetClus
 
 func assignByDynamicStrategy(state *assignState) ([]workv1alpha2.TargetCluster, error) {
 	switch state.strategy.WeightPreference.DynamicWeight {
-	case policyv1alpha1.DynamicWeightByEstimatorCalculatedReplicas:
-		return assignByStaticWeightStrategy(state)
+	case policyv1alpha1.DynamicWeightByFreshReplicas:
+		return dynamicFreshScale(state)
 	default:
 		state.buildScheduledClusters()
 
