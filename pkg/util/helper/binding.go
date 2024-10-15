@@ -121,6 +121,7 @@ func (a *Dispenser) TakeByWeight(w ClusterWeightInfoList) {
 	sort.Sort(w)
 
 	result := make([]workv1alpha2.TargetCluster, 0, w.Len())
+	var clusterWeightMap map[string]int64 = make(map[string]int64, 0)
 	remain := a.NumReplicas
 	for _, info := range w {
 		replicas := int32(info.Weight * int64(a.NumReplicas) / sum)
@@ -129,18 +130,27 @@ func (a *Dispenser) TakeByWeight(w ClusterWeightInfoList) {
 			Replicas: replicas,
 		})
 		remain -= replicas
+		clusterWeightMap[info.ClusterName] = info.Weight
 	}
 	// TODO(Garrybest): take rest replicas by fraction part
+	sort.Slice(result, func(i int, j int) bool {
+		return result[i].Replicas < result[j].Replicas
+	})
+	klog.Infof("after sort by replicas asc result: %v, with ClusterWeightInfoLists: %v", result, w)
+
 	for i := range result {
 		if remain == 0 {
 			break
 		}
-		result[i].Replicas++
-		remain--
+		if clusterWeightMap[result[i].Name] > 0 {
+			result[i].Replicas++
+			remain--
+		}
 	}
 
 	a.NumReplicas = remain
 	a.Result = util.MergeTargetClusters(a.Result, result)
+	klog.Infof("TakeByWeight remain: %d, result: %v", remain, a.Result)
 }
 
 // GetStaticWeightInfoListByTargetClusters constructs a weight list by target cluster slice.
