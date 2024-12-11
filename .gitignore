@@ -25,3 +25,4 @@ _output/
 # sub chart tgz
 charts/karmada/charts
 charts/karmada-operator/charts
+/vendor

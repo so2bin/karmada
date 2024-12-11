@@ -23,7 +23,6 @@ import (
 	clusterv1alpha1 "github.com/karmada-io/karmada/pkg/apis/cluster/v1alpha1"
 	policyv1alpha1 "github.com/karmada-io/karmada/pkg/apis/policy/v1alpha1"
 	workv1alpha2 "github.com/karmada-io/karmada/pkg/apis/work/v1alpha2"
-	"github.com/karmada-io/karmada/pkg/scheduler/framework"
 	"github.com/karmada-io/karmada/pkg/util"
 	"github.com/karmada-io/karmada/pkg/util/helper"
 )
@@ -73,9 +72,10 @@ func getStaticWeightInfoList(clusters []*clusterv1alpha1.Cluster, weightList []p
 
 // dynamicDivideReplicas assigns a total number of replicas to the selected clusters by preference according to the resource.
 func dynamicDivideReplicas(state *assignState) ([]workv1alpha2.TargetCluster, error) {
-	if state.availableReplicas < state.targetReplicas {
-		return nil, &framework.UnschedulableError{Message: fmt.Sprintf("Clusters available replicas %d are not enough to schedule.", state.availableReplicas)}
-	}
+	// distribute replicas with ratio, not fixed replicas
+	// if state.availableReplicas < state.targetReplicas {
+	// 	return nil, &framework.UnschedulableError{Message: fmt.Sprintf("Clusters available replicas %d are not enough to schedule.", state.availableReplicas)}
+	// }
 
 	switch state.strategyType {
 	case AggregatedStrategy:
