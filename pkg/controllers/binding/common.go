@@ -73,64 +73,78 @@ func ensureWork(
 
 	for i := range targetClusters {
 		targetCluster := targetClusters[i]
-		clonedWorkload := workload.DeepCopy()
+		if err := processEnsureWork(c, resourceInterpreter, workload, overrideManager, binding, scope, targetCluster, placement, replicas,
+			jobCompletions, i, conflictResolutionInBinding); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
-		workNamespace := names.GenerateExecutionSpaceName(targetCluster.Name)
-		// add cluster name to the workload's annotation
-		util.MergeAnnotation(clonedWorkload, util.ClusterNameAnnotation, targetCluster.Name)
+func processEnsureWork(
+	c client.Client, resourceInterpreter resourceinterpreter.ResourceInterpreter, workload *unstructured.Unstructured,
+	overrideManager overridemanager.OverrideManager, binding metav1.Object, scope apiextensionsv1.ResourceScope,
+	targetCluster workv1alpha2.TargetCluster, placement *policyv1alpha1.Placement, replicas int32,
+	jobCompletions []workv1alpha2.TargetCluster, jobCompletionIdx int, conflictResolutionInBinding policyv1alpha1.ConflictResolution,
+) error {
+	var err error
+	clonedWorkload := workload.DeepCopy()
 
-		// If and only if the resource template has replicas, and the replica scheduling policy is divided,
-		// we need to revise replicas.
-		if needReviseReplicas(replicas, placement) {
-			if resourceInterpreter.HookEnabled(clonedWorkload.GroupVersionKind(), configv1alpha1.InterpreterOperationReviseReplica) {
-				clonedWorkload, err = resourceInterpreter.ReviseReplica(clonedWorkload, int64(targetCluster.Replicas))
-				if err != nil {
-					klog.Errorf("Failed to revise replica for %s/%s/%s in cluster %s, err is: %v",
-						workload.GetKind(), workload.GetNamespace(), workload.GetName(), targetCluster.Name, err)
-					return err
-				}
+	workNamespace := names.GenerateExecutionSpaceName(targetCluster.Name)
+	// add cluster name to the workload's annotation
+	util.MergeAnnotation(clonedWorkload, util.ClusterNameAnnotation, targetCluster.Name)
+
+	// If and only if the resource template has replicas, and the replica scheduling policy is divided,
+	// we need to revise replicas.
+	if needReviseReplicas(replicas, placement) {
+		if resourceInterpreter.HookEnabled(clonedWorkload.GroupVersionKind(), configv1alpha1.InterpreterOperationReviseReplica) {
+			clonedWorkload, err = resourceInterpreter.ReviseReplica(clonedWorkload, int64(targetCluster.Replicas))
+			if err != nil {
+				klog.Errorf("Failed to revise replica for %s/%s/%s in cluster %s, err is: %v",
+					workload.GetKind(), workload.GetNamespace(), workload.GetName(), targetCluster.Name, err)
+				return err
 			}
+		}
 
-			// Set allocated completions for Job only when the '.spec.completions' field not omitted from resource template.
-			// For jobs running with a 'work queue' usually leaves '.spec.completions' unset, in that case we skip
-			// setting this field as well.
-			// Refer to: https://kubernetes.io/docs/concepts/workloads/controllers/job/#parallel-jobs.
-			if len(jobCompletions) > 0 {
-				if err = helper.ApplyReplica(clonedWorkload, int64(jobCompletions[i].Replicas), util.CompletionsField); err != nil {
-					klog.Errorf("Failed to apply Completions for %s/%s/%s in cluster %s, err is: %v",
-						clonedWorkload.GetKind(), clonedWorkload.GetNamespace(), clonedWorkload.GetName(), targetCluster.Name, err)
-					return err
-				}
+		// Set allocated completions for Job only when the '.spec.completions' field not omitted from resource template.
+		// For jobs running with a 'work queue' usually leaves '.spec.completions' unset, in that case we skip
+		// setting this field as well.
+		// Refer to: https://kubernetes.io/docs/concepts/workloads/controllers/job/#parallel-jobs.
+		if len(jobCompletions) > 0 {
+			if err = helper.ApplyReplica(clonedWorkload, int64(jobCompletions[jobCompletionIdx].Replicas), util.CompletionsField); err != nil {
+				klog.Errorf("Failed to apply Completions for %s/%s/%s in cluster %s, err is: %v",
+					clonedWorkload.GetKind(), clonedWorkload.GetNamespace(), clonedWorkload.GetName(), targetCluster.Name, err)
+				return err
 			}
 		}
+	}
 
-		// We should call ApplyOverridePolicies last, as override rules have the highest priority
-		cops, ops, err := overrideManager.ApplyOverridePolicies(clonedWorkload, targetCluster.Name)
-		if err != nil {
-			klog.Errorf("Failed to apply overrides for %s/%s/%s, err is: %v", clonedWorkload.GetKind(), clonedWorkload.GetNamespace(), clonedWorkload.GetName(), err)
-			return err
-		}
-		workLabel := mergeLabel(clonedWorkload, binding, scope)
+	// We should call ApplyOverridePolicies last, as override rules have the highest priority
+	cops, ops, err := overrideManager.ApplyOverridePolicies(clonedWorkload, targetCluster.Name)
+	if err != nil {
+		klog.Errorf("Failed to apply overrides for %s/%s/%s, err is: %v", clonedWorkload.GetKind(), clonedWorkload.GetNamespace(), clonedWorkload.GetName(), err)
+		return err
+	}
+	workLabel := mergeLabel(clonedWorkload, binding, scope)
 
-		annotations := mergeAnnotations(clonedWorkload, binding, scope)
-		annotations = mergeConflictResolution(clonedWorkload, conflictResolutionInBinding, annotations)
-		annotations, err = RecordAppliedOverrides(cops, ops, annotations)
-		if err != nil {
-			klog.Errorf("Failed to record appliedOverrides, Error: %v", err)
-			return err
-		}
+	annotations := mergeAnnotations(clonedWorkload, binding, scope)
+	annotations = mergeConflictResolution(clonedWorkload, conflictResolutionInBinding, annotations)
+	annotations, err = RecordAppliedOverrides(cops, ops, annotations)
+	if err != nil {
+		klog.Errorf("Failed to record appliedOverrides, Error: %v", err)
+		return err
+	}
 
-		workMeta := metav1.ObjectMeta{
-			Name:        names.GenerateWorkName(clonedWorkload.GetKind(), clonedWorkload.GetName(), clonedWorkload.GetNamespace()),
-			Namespace:   workNamespace,
-			Finalizers:  []string{util.ExecutionControllerFinalizer},
-			Labels:      workLabel,
-			Annotations: annotations,
-		}
+	workMeta := metav1.ObjectMeta{
+		Name:        names.GenerateWorkName(clonedWorkload.GetKind(), clonedWorkload.GetName(), clonedWorkload.GetNamespace()),
+		Namespace:   workNamespace,
+		Finalizers:  []string{util.ExecutionControllerFinalizer},
+		Labels:      workLabel,
+		Annotations: annotations,
+	}
 
-		if err = helper.CreateOrUpdateWork(c, workMeta, clonedWorkload); err != nil {
-			return err
-		}
+	if err = helper.CreateOrUpdateWork(c, workMeta, clonedWorkload); err != nil {
+		return err
 	}
 	return nil
 }
