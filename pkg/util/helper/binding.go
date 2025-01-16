@@ -496,6 +496,8 @@ func PatchClusterReplicas(oldTargetClusters, newTargetClusters []workv1alpha2.Ta
 					newTargetClusters[i].ReplicaChangeStatus = workv1alpha2.ReplicaChangeStatusScalingDown
 				} else if newTargetCluster.Replicas == oldTargetCluster.Replicas {
 					newTargetClusters[i].ReplicaChangeStatus = workv1alpha2.ReplicaChangeStatusStable
+				} else {
+					newTargetClusters[i].ReplicaChangeStatus = workv1alpha2.ReplicaChangeStatusUnknown
 				}
 				break
 			}

@@ -46,6 +46,9 @@ type ResourceInterpreter interface {
 	// GetReplicas returns the desired replicas of the object as well as the requirements of each replica.
 	GetReplicas(object *unstructured.Unstructured) (replica int32, replicaRequires *workv1alpha2.ReplicaRequirements, err error)
 
+	// GetMinReplicas returns the minimum replicas of the object.
+	GetMinReplicas(object *unstructured.Unstructured) (replica int32, replicaRequires *workv1alpha2.ReplicaRequirements, err error)
+
 	// ReviseReplica revises the replica of the given object.
 	ReviseReplica(object *unstructured.Unstructured, replica int64) (*unstructured.Unstructured, error)
 
@@ -144,6 +147,19 @@ func (i *customResourceInterpreterImpl) GetReplicas(object *unstructured.Unstruc
 	}
 
 	replica, requires, err = i.defaultInterpreter.GetReplicas(object)
+	return
+}
+
+// GetMinReplicas returns the minimum replicas of the object.
+func (i *customResourceInterpreterImpl) GetMinReplicas(object *unstructured.Unstructured) (replica int32, requires *workv1alpha2.ReplicaRequirements, err error) {
+	replica, requires, _, err = i.customizedInterpreter.GetMinReplicas(context.TODO(), &request.Attributes{
+		Operation: configv1alpha1.InterpreterOperationInterpretReplica,
+		Object:    object,
+	})
+	if err != nil {
+		return
+	}
+
 	return
 }
 

@@ -104,6 +104,27 @@ func (e *CustomizedInterpreter) GetReplicas(ctx context.Context, attributes *req
 	return response.Replicas, response.ReplicaRequirements, matched, nil
 }
 
+// GetMinReplicas returns the minimum replicas of the object.
+func (e *CustomizedInterpreter) GetMinReplicas(ctx context.Context, attributes *request.Attributes) (replica int32, requires *workv1alpha2.ReplicaRequirements, matched bool, err error) {
+	klog.V(4).Infof("Get minReplicas for object: %v %s/%s with webhook interpreter.",
+		attributes.Object.GroupVersionKind(), attributes.Object.GetNamespace(), attributes.Object.GetName())
+	var response *request.ResponseAttributes
+	response, matched, err = e.interpret(ctx, attributes)
+	if err != nil {
+		klog.Errorf("Get minReplicas for object: %v %s/%s with webhook interpreter failed, err: %v",
+			attributes.Object.GroupVersionKind(), attributes.Object.GetNamespace(), attributes.Object.GetName(), err)
+		return
+	}
+	if !matched {
+		klog.Infof("Get minReplicas for object: %v %s/%s with webhook interpreter, no matched hook",
+			attributes.Object.GroupVersionKind(), attributes.Object.GetNamespace(), attributes.Object.GetName())
+		return
+	}
+	klog.Infof("Get minReplicas for object: %v %s/%s with webhook interpreter, minReplicas: %d",
+		attributes.Object.GroupVersionKind(), attributes.Object.GetNamespace(), attributes.Object.GetName(), response.MinReplicas)
+	return response.MinReplicas, response.ReplicaRequirements, matched, nil
+}
+
 // Patch returns the Unstructured object that applied patch response that based on the RequestAttributes.
 // return matched value to indicate whether there is a matching hook.
 func (e *CustomizedInterpreter) Patch(ctx context.Context, attributes *request.Attributes) (obj *unstructured.Unstructured, matched bool, err error) {
