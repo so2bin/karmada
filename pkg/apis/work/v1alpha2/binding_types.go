@@ -212,6 +212,15 @@ type NodeClaim struct {
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 }
 
+type ReplicaChangeStatus string
+
+const (
+	ReplicaChangeStatusScalingUp   string = "ScalingUp"
+	ReplicaChangeStatusScalingDown string = "ScalingDown"
+	ReplicaChangeStatusStable      string = "Stable"
+	ReplicaChangeStatusUnknown     string = "Unknown"
+)
+
 // TargetCluster represents the identifier of a member cluster.
 type TargetCluster struct {
 	// Name of target cluster.
@@ -219,6 +228,10 @@ type TargetCluster struct {
 	// Replicas in target cluster
 	// +optional
 	Replicas int32 `json:"replicas,omitempty"`
+
+	// ReplicaChangeStatus represents the status of the replica change in target cluster
+	// +optional
+	ReplicaChangeStatus string `json:"replicaChangeStatus,omitempty"`
 }
 
 // GracefulEvictionTask represents a graceful eviction task.
