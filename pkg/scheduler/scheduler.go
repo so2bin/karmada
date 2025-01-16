@@ -583,6 +583,10 @@ func (s *Scheduler) patchScheduleResultForResourceBinding(oldBinding *workv1alph
 		newBinding.Annotations = make(map[string]string)
 	}
 	newBinding.Annotations[util.PolicyPlacementAnnotation] = placement
+
+	helper.PatchClusterReplicas(oldBinding.Spec.Clusters, scheduleResult)
+	klog.Infof("after add cluster replica change status for %s/%s scheduleResult: %v", oldBinding.GetNamespace(), oldBinding.GetName(), scheduleResult)
+
 	newBinding.Spec.Clusters = scheduleResult
 
 	patchBytes, err := helper.GenMergePatch(oldBinding, newBinding)

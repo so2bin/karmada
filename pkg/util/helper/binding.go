@@ -483,3 +483,22 @@ func ConstructObjectReference(rs policyv1alpha1.ResourceSelector) workv1alpha2.O
 		Name:       rs.Name,
 	}
 }
+
+// PatchClusterReplicas patch the cluster replica change status for the new target clusters.
+func PatchClusterReplicas(oldTargetClusters, newTargetClusters []workv1alpha2.TargetCluster) {
+	for i, newTargetCluster := range newTargetClusters {
+		newTargetClusters[i].ReplicaChangeStatus = workv1alpha2.ReplicaChangeStatusUnknown
+		for _, oldTargetCluster := range oldTargetClusters {
+			if newTargetCluster.Name == oldTargetCluster.Name {
+				if newTargetCluster.Replicas > oldTargetCluster.Replicas {
+					newTargetClusters[i].ReplicaChangeStatus = workv1alpha2.ReplicaChangeStatusScalingUp
+				} else if newTargetCluster.Replicas < oldTargetCluster.Replicas {
+					newTargetClusters[i].ReplicaChangeStatus = workv1alpha2.ReplicaChangeStatusScalingDown
+				} else if newTargetCluster.Replicas == oldTargetCluster.Replicas {
+					newTargetClusters[i].ReplicaChangeStatus = workv1alpha2.ReplicaChangeStatusStable
+				}
+				break
+			}
+		}
+	}
+}
