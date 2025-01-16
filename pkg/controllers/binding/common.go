@@ -454,12 +454,13 @@ func getMinReplicasFromResourceTemplate(workload *unstructured.Unstructured) (in
 }
 
 func getMinReplicas(resourceInterpreter resourceinterpreter.ResourceInterpreter, workload *unstructured.Unstructured) (int, error) {
+	// 从resource interpreter中获取minReplicas
 	minReplicas, err := getMinReplicasFromResourceInterpreter(resourceInterpreter, workload)
-	if err == nil && minReplicas != 0 { // TOOD 暂时不从resourceInterpreter获取minReplicas
+	if err == nil && minReplicas != 0 {
 		klog.Infof("Get minReplicas from resource interpreter for workload %s/%s: %d", workload.GetNamespace(), workload.GetName(), minReplicas)
 		return int(minReplicas), nil
 	}
-
+	// 从resource template中获取minReplicas
 	minReplicas, err = getMinReplicasFromResourceTemplate(workload)
 	if err == nil {
 		klog.Infof("Get minReplicas from resource template for workload %s/%s: %d", workload.GetNamespace(), workload.GetName(), minReplicas)

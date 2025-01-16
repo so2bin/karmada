@@ -112,6 +112,9 @@ func verifyResourceInterpreterContext(operation configv1alpha1.InterpreterOperat
 			return nil, fmt.Errorf("webhook returned nil response.replicas")
 		}
 		res.Replicas = *response.Replicas
+		if response.MinReplicas != nil {
+			res.MinReplicas = *response.MinReplicas
+		}
 		res.ReplicaRequirements = response.ReplicaRequirements
 		return res, nil
 	case configv1alpha1.InterpreterOperationInterpretDependency:

@@ -38,6 +38,7 @@ type ResponseAttributes struct {
 	Successful          bool
 	Status              configv1alpha1.RequestStatus
 	Replicas            int32
+	MinReplicas         int32
 	ReplicaRequirements *workv1alpha2.ReplicaRequirements
 	Dependencies        []configv1alpha1.DependentObjectReference
 	Patch               []byte
