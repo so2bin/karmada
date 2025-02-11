@@ -54,6 +54,10 @@ spec:
                     name:
                       description: Name of target cluster.
                       type: string
+                    replicaChangeStatus:
+                      description: ReplicaChangeStatus represents the status of the
+                        replica change in target cluster
+                      type: string
                     replicas:
                       description: Replicas in target cluster
                       format: int32
@@ -265,6 +269,10 @@ spec:
                   properties:
                     name:
                       description: Name of target cluster.
+                      type: string
+                    replicaChangeStatus:
+                      description: ReplicaChangeStatus represents the status of the
+                        replica change in target cluster
                       type: string
                     replicas:
                       description: Replicas in target cluster
@@ -1103,6 +1111,10 @@ spec:
                         properties:
                           name:
                             description: Name of target cluster.
+                            type: string
+                          replicaChangeStatus:
+                            description: ReplicaChangeStatus represents the status
+                              of the replica change in target cluster
                             type: string
                           replicas:
                             description: Replicas in target cluster

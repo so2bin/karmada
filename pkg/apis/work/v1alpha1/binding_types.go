@@ -81,6 +81,13 @@ type ObjectReference struct {
 	Replicas int32 `json:"replicas,omitempty"`
 }
 
+const (
+	ReplicaChangeStatusScalingUp   string = "ScalingUp"
+	ReplicaChangeStatusScalingDown string = "ScalingDown"
+	ReplicaChangeStatusStable      string = "Stable"
+	ReplicaChangeStatusUnknown     string = "Unknown"
+)
+
 // TargetCluster represents the identifier of a member cluster.
 type TargetCluster struct {
 	// Name of target cluster.
@@ -88,6 +95,10 @@ type TargetCluster struct {
 	// Replicas in target cluster
 	// +optional
 	Replicas int32 `json:"replicas,omitempty"`
+
+	// ReplicaChangeStatus represents the status of the replica change in target cluster
+	// +optional
+	ReplicaChangeStatus string `json:"replicaChangeStatus,omitempty"`
 }
 
 // ResourceBindingStatus represents the overall status of the strategy as well as the referenced resources.

@@ -90,6 +90,7 @@ import (
 	"github.com/karmada-io/karmada/pkg/util/restmapper"
 	"github.com/karmada-io/karmada/pkg/version"
 	"github.com/karmada-io/karmada/pkg/version/sharedcommand"
+	gocache "github.com/patrickmn/go-cache"
 )
 
 // NewControllerManagerCommand creates a *cobra.Command object with default parameters
@@ -345,6 +346,7 @@ func startBindingController(ctx controllerscontext.Context) (enabled bool, err e
 		InformerManager:     ctx.ControlPlaneInformerManager,
 		ResourceInterpreter: ctx.ResourceInterpreter,
 		RateLimiterOptions:  ctx.Opts.RateLimiterOptions,
+		GoCache:             gocache.New(5*time.Minute, 10*time.Minute),
 	}
 	if err := bindingController.SetupWithManager(ctx.Mgr); err != nil {
 		return false, err

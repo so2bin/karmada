@@ -118,6 +118,11 @@ type ResourceInterpreterResponse struct {
 	// +optional
 	Replicas *int32 `json:"replicas,omitempty"`
 
+	// MinReplicas represents the minimum replicas of the object.
+	// Required if InterpreterOperation is InterpreterOperationInterpretMinReplicas.
+	// +optional
+	MinReplicas *int32 `json:"minReplicas,omitempty"`
+
 	// Dependencies represents the reference of dependencies object.
 	// Required if InterpreterOperation is InterpreterOperationInterpretDependency.
 	// +optional
