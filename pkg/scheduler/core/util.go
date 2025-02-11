@@ -74,9 +74,13 @@ func calAvailableReplicas(clusters []*clusterv1alpha1.Cluster, spec *workv1alpha
 	ctx := context.WithValue(context.TODO(), util.ContextKeyObject,
 		fmt.Sprintf("kind=%s, name=%s/%s", spec.Resource.Kind, spec.Resource.Namespace, spec.Resource.Name))
 	for name, estimator := range estimators {
+		// ignore general-estimator
+		if name == "general-estimator" {
+			continue
+		}
 		res, err := estimator.MaxAvailableReplicas(ctx, clusters, spec.ReplicaRequirements)
 		if err != nil {
-			klog.Errorf("Max cluster available replicas error: %v", err)
+			klog.Errorf("Max cluster available replicas error: %v, estimator: %s, resource: %s", err, name, namespacedKey)
 			continue
 		}
 		klog.V(4).Infof("Invoked MaxAvailableReplicas of estimator %s for workload(%s, kind=%s, %s): %v", name,
@@ -92,14 +96,22 @@ func calAvailableReplicas(clusters []*clusterv1alpha1.Cluster, spec *workv1alpha
 	}
 
 	// In most cases, the target cluster max available replicas should not be MaxInt32 unless the workload is best-effort
-	// and the scheduler-estimator has not been enabled. So we set the replicas to spec.Replicas for avoiding overflow.
+	// and the scheduler-estimator has not been enabled. So we set the replicas to last scheduled replicas for avoiding overflow.
 	for i := range availableTargetClusters {
 		if availableTargetClusters[i].Replicas == math.MaxInt32 {
-			availableTargetClusters[i].Replicas = spec.Replicas
+			for _, cluster := range spec.Clusters {
+				if cluster.Name == availableTargetClusters[i].Name {
+					klog.Infof("Set replicas to last scheduled replicas for %s/%s in cluster %s",
+						spec.Resource.Namespace, spec.Resource.Name, availableTargetClusters[i].Name)
+					availableTargetClusters[i].Replicas = cluster.Replicas
+					break
+				}
+			}
 		}
 	}
 
-	klog.V(4).Infof("Target cluster calculated by estimators (available cluster && maxAvailableReplicas): %v", availableTargetClusters)
+	klog.Infof("Target cluster calculated by estimators for %s/%s (available cluster && maxAvailableReplicas): %v",
+		spec.Resource.Namespace, spec.Resource.Name, availableTargetClusters)
 	return availableTargetClusters
 }
 
