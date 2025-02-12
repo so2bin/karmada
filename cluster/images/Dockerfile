@@ -12,10 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM alpine:3.20.2
+FROM hub-mirror.wps.cn/kas-open/base/alpine:3.20.2
 
 ARG BINARY
-
 RUN apk add --no-cache ca-certificates
 #tzdata is used to parse the time zone information when using CronFederatedHPA
 RUN apk add --no-cache tzdata

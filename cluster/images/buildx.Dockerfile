@@ -12,13 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM alpine:3.20.2
+FROM hub-mirror.wps.cn/kas-open/base/alpine:3.20.2
+
+# Replace default repositories with reliable mirror
+RUN echo "https://mirrors.aliyun.com/alpine/v3.20/main/" > /etc/apk/repositories && \
+    echo "https://mirrors.aliyun.com/alpine/v3.20/community/" >> /etc/apk/repositories
 
 ARG BINARY
 ARG TARGETPLATFORM
 
-RUN apk add --no-cache ca-certificates
-#tzdata is used to parse the time zone information when using CronFederatedHPA
-RUN apk add --no-cache tzdata
+# Update and install packages with retries
+RUN apk update --no-cache && \
+    apk add --no-cache ca-certificates --retries 3 && \
+    apk add --no-cache tzdata --retries 3
 
 COPY ${TARGETPLATFORM}/${BINARY} /bin/${BINARY}
