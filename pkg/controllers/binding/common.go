@@ -86,10 +86,11 @@ func ensureWork(
 	errChan := make(chan error, len(targetClusters))
 	for i := range targetClusters {
 		targetCluster := targetClusters[i]
-		if isEnableDelayedScalingNs(workload.GetNamespace()) && isAtmsNodeCmName(workload.GetName()) &&
-			isScalingDown(targetCluster.ReplicaChangeStatus) && cache != nil {
+		needDelayedScaling := needDelayedScaling(targetClusters, targetCluster)
 
-			klog.Infof("%s/%s is scaling down in cluster %s, delay to process ensureWork",
+		if isEnableDelayedScalingNs(workload.GetNamespace()) && isAtmsNodeCmName(workload.GetName()) &&
+			needDelayedScaling && cache != nil {
+			klog.Infof("%s/%s is scaling down in cluster %s and other clusters is scaling up, delay to process ensureWork",
 				workload.GetNamespace(), workload.GetName(), targetCluster.Name)
 			wg.Add(1)
 
@@ -172,6 +173,7 @@ func processEnsureWorkWithRetry(cache *gocache.Cache, client client.Client, reso
 		workloadKey, targetCluster.Name)
 
 	// Fallback: process work creation even if threshold was never reached
+	klog.Infof("reached the scale up threshold, going to process ensureWork for %s/%s in cluster %s", workload.GetNamespace(), workload.GetName(), targetCluster.Name)
 	return processEnsureWork(client, resourceInterpreter, workload, overrideManager, binding, scope,
 		targetCluster, placement, replicas, jobCompletions, idx, conflictResolutionInBinding)
 }
@@ -182,8 +184,6 @@ func processEnsureWork(
 	targetCluster workv1alpha2.TargetCluster, placement *policyv1alpha1.Placement, replicas int32,
 	jobCompletions []workv1alpha2.TargetCluster, idx int, conflictResolutionInBinding policyv1alpha1.ConflictResolution,
 ) error {
-
-	klog.Infof("reached the scale up threshold, processEnsureWork for %s/%s in cluster %s", workload.GetNamespace(), workload.GetName(), targetCluster.Name)
 	var err error
 	clonedWorkload := workload.DeepCopy()
 
@@ -383,8 +383,18 @@ func isAtmsNodeCmName(name string) bool {
 	return strings.HasPrefix(name, ATMSNodeCmPrefix)
 }
 
-func isScalingDown(replicaChangeStatus string) bool {
-	return replicaChangeStatus == workv1alpha2.ReplicaChangeStatusScalingDown
+func needDelayedScaling(targetClusters []workv1alpha2.TargetCluster, currentCluster workv1alpha2.TargetCluster) bool {
+	containScaleUpFlag := false
+	for _, cluster := range targetClusters {
+		if cluster.ReplicaChangeStatus == workv1alpha2.ReplicaChangeStatusScalingUp {
+			containScaleUpFlag = true
+			break
+		}
+	}
+	if containScaleUpFlag {
+		return currentCluster.ReplicaChangeStatus == workv1alpha2.ReplicaChangeStatusScalingDown
+	}
+	return false
 }
 
 // KNodeScale app node scaleobject
