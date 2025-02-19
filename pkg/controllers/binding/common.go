@@ -140,7 +140,7 @@ func processEnsureWorkWithRetry(cache *gocache.Cache, client client.Client, reso
 	targetCluster workv1alpha2.TargetCluster, placement *policyv1alpha1.Placement, replicas int32,
 	jobCompletions []workv1alpha2.TargetCluster, idx int, conflictResolutionInBinding policyv1alpha1.ConflictResolution) error {
 
-	sleepDuration := 5 * time.Second
+	sleepDuration := time.Duration(EnvDelayedScalingSleepDurationSecond) * time.Second
 	maxAttempts := int(EnvDelayedScalingTimeoutSecond / int(sleepDuration.Seconds()))
 
 	workloadKey := fmt.Sprintf("%s/%s", workload.GetNamespace(), workload.GetName())
