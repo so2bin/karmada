@@ -17,7 +17,6 @@ limitations under the License.
 package binding
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -26,8 +25,10 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	k8syaml "sigs.k8s.io/yaml"
 
 	configv1alpha1 "github.com/karmada-io/karmada/pkg/apis/config/v1alpha1"
 	policyv1alpha1 "github.com/karmada-io/karmada/pkg/apis/policy/v1alpha1"
@@ -38,13 +39,11 @@ import (
 	"github.com/karmada-io/karmada/pkg/util/names"
 	"github.com/karmada-io/karmada/pkg/util/overridemanager"
 	gocache "github.com/patrickmn/go-cache"
-	k8scorev1 "k8s.io/api/core/v1"
-	k8syaml "sigs.k8s.io/yaml"
 )
 
 // ensureWork ensure Work to be created or updated.
 func ensureWork(
-	cache *gocache.Cache, client client.Client, resourceInterpreter resourceinterpreter.ResourceInterpreter, workload *unstructured.Unstructured,
+	cache *gocache.Cache, client client.Client, karmadaSearchCli *SKarmadaSearch, resourceInterpreter resourceinterpreter.ResourceInterpreter, workload *unstructured.Unstructured,
 	overrideManager overridemanager.OverrideManager, binding metav1.Object, scope apiextensionsv1.ResourceScope,
 ) error {
 	var targetClusters []workv1alpha2.TargetCluster
@@ -86,16 +85,17 @@ func ensureWork(
 	errChan := make(chan error, len(targetClusters))
 	for i := range targetClusters {
 		targetCluster := targetClusters[i]
-		if isEnableDelayedScalingNs(workload.GetNamespace()) && isAtmsNodeCmName(workload.GetName()) &&
-			isScalingDown(targetCluster.ReplicaChangeStatus) && cache != nil {
+		needDelayedScaling := needDelayedScaling(targetClusters, targetCluster)
 
-			klog.Infof("%s/%s is scaling down in cluster %s, delay to process ensureWork",
+		if isEnableDelayedScalingNs(workload.GetNamespace()) && isAtmsNodeCmName(workload.GetName()) &&
+			needDelayedScaling && cache != nil {
+			klog.Infof("%s/%s is scaling down in cluster %s and other clusters is scaling up, delay to process ensureWork",
 				workload.GetNamespace(), workload.GetName(), targetCluster.Name)
 			wg.Add(1)
 
 			go func(targetCluster workv1alpha2.TargetCluster, i int) {
 				defer wg.Done()
-				if err := processEnsureWorkWithRetry(cache, client, resourceInterpreter, workload,
+				if err := processEnsureWorkWithRetry(cache, client, karmadaSearchCli, resourceInterpreter, workload,
 					overrideManager, binding, scope, targetCluster, placement, replicas,
 					jobCompletions, i, conflictResolutionInBinding); err != nil {
 
@@ -134,19 +134,19 @@ func ensureWork(
 	}
 }
 
-func processEnsureWorkWithRetry(cache *gocache.Cache, client client.Client, resourceInterpreter resourceinterpreter.ResourceInterpreter,
+func processEnsureWorkWithRetry(cache *gocache.Cache, client client.Client, karmadaSearchCli *SKarmadaSearch, resourceInterpreter resourceinterpreter.ResourceInterpreter,
 	workload *unstructured.Unstructured, overrideManager overridemanager.OverrideManager, binding metav1.Object, scope apiextensionsv1.ResourceScope,
 	targetCluster workv1alpha2.TargetCluster, placement *policyv1alpha1.Placement, replicas int32,
 	jobCompletions []workv1alpha2.TargetCluster, idx int, conflictResolutionInBinding policyv1alpha1.ConflictResolution) error {
 
-	sleepDuration := 5 * time.Second
+	sleepDuration := time.Duration(EnvDelayedScalingSleepDurationSecond) * time.Second
 	maxAttempts := int(EnvDelayedScalingTimeoutSecond / int(sleepDuration.Seconds()))
 
 	workloadKey := fmt.Sprintf("%s/%s", workload.GetNamespace(), workload.GetName())
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		// Check if other clusters have reached scale up threshold
-		hasReachedThreshold, err := IsOtherReachScaleUpThreshold(cache, client, targetCluster.Name, workload.GetNamespace(), workload.GetName())
+		hasReachedThreshold, err := IsOtherReachScaleUpThreshold(cache, karmadaSearchCli, targetCluster.Name, workload.GetNamespace(), workload.GetName())
 		if err != nil {
 			klog.Warningf("Failed to check scale up threshold for %s in cluster %s (attempt %d/%d): %v",
 				workloadKey, targetCluster.Name, attempt, maxAttempts, err)
@@ -172,6 +172,7 @@ func processEnsureWorkWithRetry(cache *gocache.Cache, client client.Client, reso
 		workloadKey, targetCluster.Name)
 
 	// Fallback: process work creation even if threshold was never reached
+	klog.Infof("reached the scale up threshold, going to process ensureWork for %s/%s in cluster %s", workload.GetNamespace(), workload.GetName(), targetCluster.Name)
 	return processEnsureWork(client, resourceInterpreter, workload, overrideManager, binding, scope,
 		targetCluster, placement, replicas, jobCompletions, idx, conflictResolutionInBinding)
 }
@@ -182,8 +183,6 @@ func processEnsureWork(
 	targetCluster workv1alpha2.TargetCluster, placement *policyv1alpha1.Placement, replicas int32,
 	jobCompletions []workv1alpha2.TargetCluster, idx int, conflictResolutionInBinding policyv1alpha1.ConflictResolution,
 ) error {
-
-	klog.Infof("reached the scale up threshold, processEnsureWork for %s/%s in cluster %s", workload.GetNamespace(), workload.GetName(), targetCluster.Name)
 	var err error
 	clonedWorkload := workload.DeepCopy()
 
@@ -383,8 +382,18 @@ func isAtmsNodeCmName(name string) bool {
 	return strings.HasPrefix(name, ATMSNodeCmPrefix)
 }
 
-func isScalingDown(replicaChangeStatus string) bool {
-	return replicaChangeStatus == workv1alpha2.ReplicaChangeStatusScalingDown
+func needDelayedScaling(targetClusters []workv1alpha2.TargetCluster, currentCluster workv1alpha2.TargetCluster) bool {
+	containScaleUpFlag := false
+	for _, cluster := range targetClusters {
+		if cluster.ReplicaChangeStatus == workv1alpha2.ReplicaChangeStatusScalingUp {
+			containScaleUpFlag = true
+			break
+		}
+	}
+	if containScaleUpFlag {
+		return currentCluster.ReplicaChangeStatus == workv1alpha2.ReplicaChangeStatusScalingDown
+	}
+	return false
 }
 
 // KNodeScale app node scaleobject
@@ -471,7 +480,7 @@ func getMinReplicas(resourceInterpreter resourceinterpreter.ResourceInterpreter,
 	return 0, err
 }
 
-func recordBeginEndpoint(gocache *gocache.Cache, client client.Client, resourceInterpreter resourceinterpreter.ResourceInterpreter, workload *unstructured.Unstructured,
+func recordBeginEndpoint(gocache *gocache.Cache, karmadaSearchCli *SKarmadaSearch, resourceInterpreter resourceinterpreter.ResourceInterpreter, workload *unstructured.Unstructured,
 	binding metav1.Object, scope apiextensionsv1.ResourceScope) error {
 
 	var targetClusters []workv1alpha2.TargetCluster
@@ -487,6 +496,20 @@ func recordBeginEndpoint(gocache *gocache.Cache, client client.Client, resourceI
 		requiredByBindingSnapshot = bindingObj.Spec.RequiredBy
 	}
 
+	startTime := time.Now()
+	ns := workload.GetNamespace()
+	name := GetEndpointName(workload.GetName())
+	endpoints, err := karmadaSearchCli.GetEndpointsFromKarmadaSearch(types.NamespacedName{Namespace: ns, Name: name})
+	if err != nil {
+		klog.Errorf("Failed to get endpoints from karmada search: %v", err)
+	}
+	clusterEndpointsMap, err := GetClusterEndpointMap(endpoints)
+	if err != nil {
+		klog.Errorf("Failed to get endpoints from karmadaSearch for %s/%s, error: %v", ns, name, err)
+	}
+	klog.Infof("Success get endpoints from karmadaSearch for %s/%s took %v, clusterEndpointsMap: %v", ns, name,
+		time.Since(startTime), clusterEndpointsMap)
+
 	targetClusters = mergeTargetClusters(targetClusters, requiredByBindingSnapshot)
 
 	SyncTargetClusterToCache(gocache, workload.GetNamespace(), workload.GetName(), targetClusters)
@@ -501,80 +524,31 @@ func recordBeginEndpoint(gocache *gocache.Cache, client client.Client, resourceI
 		klog.Errorf("Failed to get minReplicas for workload %s/%s, error: %v", workload.GetNamespace(), workload.GetName(), err)
 		return err
 	}
+
+	endpointProgressMap := make(map[string]*ExpansionProgress)
+
 	for i := range targetClusters {
 		targetCluster := targetClusters[i]
 		clusterName := targetCluster.Name
-		// Skip recording endpoint for the cluster that is scaling down
-		if targetCluster.ReplicaChangeStatus == workv1alpha2.ReplicaChangeStatusScalingDown {
-			continue
-		}
-		endpointsSubsetAddressLength, err := getEndpointsFromClient(client, clusterName, workload.GetNamespace(), workload.GetName())
-		if err != nil {
-			klog.Errorf("Failed to get endpoint for cluster %s, workload: %s/%s, error: %v", clusterName, workload.GetNamespace(), workload.GetName(), err)
-			continue
-		}
+		currentEndpoints := clusterEndpointsMap[clusterName]
+
 		endpointName := GetEndpointName(workload.GetName())
 		progress := &ExpansionProgress{
-			Namespace:        workload.GetNamespace(),
-			Name:             endpointName,
-			CurrentEndpoints: endpointsSubsetAddressLength,
-			BeginEndpoints:   endpointsSubsetAddressLength,
-			LastUpdate:       time.Now(),
+			Namespace:            workload.GetNamespace(),
+			Name:                 endpointName,
+			CurrentEndpoints:     currentEndpoints,
+			BeginEndpoints:       currentEndpoints,
+			ReplicasChangeStatus: targetCluster.ReplicaChangeStatus,
+			LastUpdate:           time.Now(),
 		}
-
 		if replicasSum > 0 {
 			progress.FinMinReplicas = minReplicas * int(targetCluster.Replicas) / replicasSum
+			klog.Infof("%s/%s cluster %s progress.FinMinReplicas: (%d * %d) / %d= %d", workload.GetNamespace(), workload.GetName(), clusterName,
+				minReplicas, targetCluster.Replicas, replicasSum, progress.FinMinReplicas)
 		}
-		SyncEndpointProgressToCache(gocache, clusterName, workload.GetNamespace(), workload.GetName(), progress)
-		klog.Infof("Recorded endpoint for cluster %s, workload: %s/%s, progress: %v", clusterName, workload.GetNamespace(), workload.GetName(), progress)
+		endpointProgressMap[clusterName] = progress
 	}
+
+	SyncEndpointProgressMapToCache(gocache, workload.GetNamespace(), workload.GetName(), endpointProgressMap)
 	return nil
-}
-
-func getEndpointsFromClient(client client.Client, clusterName, ns, name string) (int, error) {
-	name = GetEndpointName(name)
-	clusterClient, err := util.NewClusterClientSet(clusterName, client, &util.ClientOption{})
-	if err != nil {
-		klog.Errorf("Failed to create a ClusterClient for the given member cluster: %v, err is : %v", clusterName, err)
-		// return c.setStatusCollectionFailedCondition(cluster, currentClusterStatus, fmt.Sprintf("failed to create a ClusterClient: %v", err))
-		return 0, err
-	}
-
-	var endpointsSubsetAddressLength int
-	endpoint, err := getEndpointFromDiscoveryClient(clusterClient, clusterName, ns, name)
-	if err != nil {
-		klog.Errorf("Failed to get endpoint from DiscoveryClient for cluster %s, error: %v", clusterName, err)
-		return 0, err
-	} else {
-		endpointsSubsetAddressLength = 0
-		if len(endpoint.Subsets) > 0 {
-			for _, subset := range endpoint.Subsets {
-				endpointsSubsetAddressLength += len(subset.Addresses)
-			}
-		}
-		klog.Infof("recordEndpoint for cluster %s, workload: %s/%s endpoint Subsets len: %d, endpoint Subsets: %v",
-			clusterName, ns, name, endpointsSubsetAddressLength, endpoint.Subsets)
-	}
-	return endpointsSubsetAddressLength, nil
-}
-
-func getEndpointFromDiscoveryClient(clusterClient *util.ClusterClient, cluster, ns, name string) (*k8scorev1.Endpoints, error) {
-	if clusterClient == nil || clusterClient.KubeClient == nil || clusterClient.KubeClient.DiscoveryClient == nil {
-		return nil, fmt.Errorf("invalid cluster client configuration")
-	}
-
-	endpointName := GetEndpointName(name)
-	endpoint := &k8scorev1.Endpoints{}
-
-	err := clusterClient.KubeClient.DiscoveryClient.RESTClient().
-		Get().
-		AbsPath("api/v1/namespaces/" + ns + "/endpoints/" + endpointName).
-		Do(context.Background()).
-		Into(endpoint)
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to get endpoints from cluster %s for %s/%s: %v", cluster, ns, name, err)
-	}
-
-	return endpoint, nil
 }

@@ -19,11 +19,13 @@ package app
 import (
 	"context"
 	"flag"
+	"fmt"
 	"net"
 	"strconv"
 	"time"
 
 	"github.com/spf13/cobra"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/discovery"
@@ -31,6 +33,7 @@ import (
 	"k8s.io/client-go/informers"
 	kubeclientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	k8srestmapper "k8s.io/client-go/restmapper"
 	cliflag "k8s.io/component-base/cli/flag"
 	"k8s.io/component-base/term"
 	"k8s.io/klog/v2"
@@ -73,6 +76,7 @@ import (
 	"github.com/karmada-io/karmada/pkg/dependenciesdistributor"
 	"github.com/karmada-io/karmada/pkg/detector"
 	"github.com/karmada-io/karmada/pkg/features"
+	karmada "github.com/karmada-io/karmada/pkg/generated/clientset/versioned"
 	"github.com/karmada-io/karmada/pkg/karmadactl/util/apiclient"
 	"github.com/karmada-io/karmada/pkg/metrics"
 	"github.com/karmada-io/karmada/pkg/resourceinterpreter"
@@ -348,6 +352,14 @@ func startBindingController(ctx controllerscontext.Context) (enabled bool, err e
 		RateLimiterOptions:  ctx.Opts.RateLimiterOptions,
 		GoCache:             gocache.New(5*time.Minute, 10*time.Minute),
 	}
+
+	restConfig := ctx.Mgr.GetConfig()
+	karmadaSearchCli, err := NewKarmadaSearchCli(restConfig)
+	if err != nil {
+		return false, err
+	}
+	bindingController.KarmadaSearchCli = karmadaSearchCli
+
 	if err := bindingController.SetupWithManager(ctx.Mgr); err != nil {
 		return false, err
 	}
@@ -366,6 +378,30 @@ func startBindingController(ctx controllerscontext.Context) (enabled bool, err e
 		return false, err
 	}
 	return true, nil
+}
+
+// startRestInterface initializes the REST interface for Karmada search
+func NewKarmadaSearchCli(restConfig *rest.Config) (*binding.SKarmadaSearch, error) {
+	if restConfig == nil {
+		return nil, fmt.Errorf("restConfig is nil")
+	}
+	karmadaCli, err := karmada.NewForConfig(restConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	var kmdSearch binding.SKarmadaSearch
+	kmdSearch.SearchCli = karmadaCli.SearchV1alpha1().RESTClient()
+	kmdSearch.BaseApi = "apis/search.karmada.io/v1alpha1/search/cache"
+	kmdSearch.Scheme = runtime.NewScheme()
+
+	discoveryClient := karmadaCli.Discovery()
+	apiGroupResources, err := k8srestmapper.GetAPIGroupResources(discoveryClient)
+	if err != nil {
+		return nil, err
+	}
+	kmdSearch.Mapper = k8srestmapper.NewDiscoveryRESTMapper(apiGroupResources)
+	return &kmdSearch, nil
 }
 
 func startBindingStatusController(ctx controllerscontext.Context) (enabled bool, err error) {

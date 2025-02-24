@@ -18,15 +18,21 @@ package binding
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
 	controllerruntime "sigs.k8s.io/controller-runtime"
@@ -66,7 +72,8 @@ type ResourceBindingController struct {
 	ResourceInterpreter         resourceinterpreter.ResourceInterpreter
 	RateLimiterOptions          ratelimiterflag.Options
 
-	GoCache *gocache.Cache
+	KarmadaSearchCli *SKarmadaSearch // used to get endpoints from karmada search
+	GoCache          *gocache.Cache
 }
 
 // Reconcile performs a full reconciliation for the object referred to by the Request.
@@ -132,12 +139,12 @@ func (c *ResourceBindingController) syncBinding(binding *workv1alpha2.ResourceBi
 	start := time.Now()
 
 	if isEnableDelayedScalingNs(workload.GetNamespace()) && isAtmsNodeCmName(workload.GetName()) {
-		err = recordBeginEndpoint(c.GoCache, c.Client, c.ResourceInterpreter, workload, binding, apiextensionsv1.NamespaceScoped)
+		err = recordBeginEndpoint(c.GoCache, c.KarmadaSearchCli, c.ResourceInterpreter, workload, binding, apiextensionsv1.NamespaceScoped)
 		if err != nil {
 			klog.Errorf("recordBeginEndpoint error: %v", err)
 		}
 	}
-	err = ensureWork(c.GoCache, c.Client, c.ResourceInterpreter, workload, c.OverrideManager, binding, apiextensionsv1.NamespaceScoped)
+	err = ensureWork(c.GoCache, c.Client, c.KarmadaSearchCli, c.ResourceInterpreter, workload, c.OverrideManager, binding, apiextensionsv1.NamespaceScoped)
 	metrics.ObserveSyncWorkLatency(err, start)
 	if err != nil {
 		klog.Errorf("Failed to transform resourceBinding(%s/%s) to works. Error: %v.",
@@ -237,4 +244,112 @@ func (c *ResourceBindingController) newOverridePolicyFunc() handler.MapFunc {
 		}
 		return requests
 	}
+}
+
+type SKarmadaSearch struct {
+	SearchCli rest.Interface
+	BaseApi   string
+	Scheme    *runtime.Scheme
+	Mapper    meta.RESTMapper
+}
+
+type SearchOptions struct {
+	LabelSelector string
+	Unique        bool //过滤多集群同名资源, 只保留一份
+}
+
+func (ss *SKarmadaSearch) search(ctx context.Context, gvk schema.GroupVersionKind, nn types.NamespacedName,
+	options *SearchOptions) (unstructured.UnstructuredList, error) {
+	var rawList unstructured.UnstructuredList
+
+	apiPrefix := "/apis"
+	if gvk.Group == "" {
+		apiPrefix = "/api"
+	}
+	basePath := fmt.Sprintf("%s/%s", apiPrefix, gvk.GroupVersion())
+
+	// 如果有命名空间，加上命名空间的路径
+	if nn.Namespace != "" {
+		basePath = fmt.Sprintf("%s/namespaces/%s", basePath, nn.Namespace)
+	}
+
+	// 加上资源类型
+	rMap, err := ss.Mapper.RESTMapping(schema.GroupKind{Group: gvk.Group, Kind: gvk.Kind}, gvk.Version)
+	if err != nil {
+		klog.Errorf("get rest mapping err: %v", err)
+		return rawList, err
+	}
+	resourcePath := fmt.Sprintf("%s/%s", basePath, rMap.Resource.Resource)
+
+	// 如果有具体的资源名称，加上资源名称
+	if nn.Name != "" {
+		resourcePath = fmt.Sprintf("%s/%s", resourcePath, nn.Name)
+	}
+
+	req := ss.SearchCli.Get().AbsPath(fmt.Sprintf("%s/%s", ss.BaseApi, resourcePath))
+	if options != nil {
+		if options.LabelSelector != "" {
+			req = req.Param("labelSelector", options.LabelSelector)
+		}
+	}
+
+	res := req.Do(ctx)
+
+	b, err := res.Raw()
+	if err != nil {
+		return rawList, err
+	}
+
+	err = json.Unmarshal(b, &rawList)
+	if err != nil {
+		return rawList, err
+	}
+
+	if !rawList.IsList() || len(rawList.Items) == 0 {
+		return rawList, fmt.Errorf("not found")
+	}
+	return rawList, nil
+}
+
+func (ss *SKarmadaSearch) GetEndpointsFromKarmadaSearch(nn types.NamespacedName) ([]corev1.Endpoints, error) {
+	raws, err := ss.search(context.TODO(), schema.GroupVersionKind{
+		Group:   "", // Endpoints is core API group
+		Version: "v1",
+		Kind:    "Endpoints",
+	}, nn, &SearchOptions{Unique: true})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get endpoints from karmadaSearch for %s/%s, error: %v", nn.Namespace, nn.Name, err)
+	}
+
+	endpoints := make([]corev1.Endpoints, 0, len(raws.Items))
+	for _, raw := range raws.Items {
+		var endpoint corev1.Endpoints
+		err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Object, &endpoint)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert unstructured to Endpoints: %v", err)
+		}
+		endpoints = append(endpoints, endpoint)
+	}
+
+	return endpoints, nil
+}
+
+type ClusterReplicas struct {
+	ClusterName string
+	Replicas    int
+}
+
+func GetClusterEndpointMap(endpoints []corev1.Endpoints) (map[string]int, error) {
+	var clusterEndpoints map[string]int = make(map[string]int)
+	for _, endpoint := range endpoints {
+		if clusterName, ok := endpoint.Annotations["resource.karmada.io/cached-from-cluster"]; ok {
+			endpointLength := 0
+			for _, subset := range endpoint.Subsets {
+				endpointLength += len(subset.Addresses)
+			}
+			clusterEndpoints[clusterName] = endpointLength
+		}
+	}
+	return clusterEndpoints, nil
 }
