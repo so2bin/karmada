@@ -134,7 +134,12 @@ func (a *Dispenser) TakeByWeight(w ClusterWeightInfoList) {
 	}
 	// TODO(Garrybest): take rest replicas by fraction part
 	sort.Slice(result, func(i int, j int) bool {
-		return result[i].Replicas < result[j].Replicas
+		if result[i].Replicas < result[j].Replicas {
+			return true
+		} else if result[i].Replicas == result[j].Replicas {
+			return result[i].Name < result[j].Name
+		}
+		return false
 	})
 	klog.Infof("after sort by replicas asc result: %v, with ClusterWeightInfoLists: %v", result, w)
 
