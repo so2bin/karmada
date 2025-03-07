@@ -41,7 +41,7 @@ func GetEnvDefaultInt(key string, defval int) int {
 	return val
 }
 
-var EnvEnableDelayedScalingNamespace string = GetEnvDefaultString("ENABLE_DELAYED_SCALING_NAMESPACE", "tmp-test-dev-3,lwd-test2")
+var EnvEnableDelayedScalingNamespace string = GetEnvDefaultString("ENABLE_DELAYED_SCALING_NAMESPACE", "tmp-test-dev-3,atms-oversea-test,lwd-test2")
 
 var EnvDelayedScalingTimeoutSecond int = GetEnvDefaultInt("DELAYED_SCALING_TIMEOUT_SECOND", 1800)
 
