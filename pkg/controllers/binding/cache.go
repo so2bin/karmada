@@ -58,6 +58,9 @@ func SyncEndpointProgressMapToCache(goCache *gocache.Cache, namespace, name stri
 	key := fmt.Sprintf("endpoints-progress-%s-%s", namespace, name)
 	goCache.Set(key, progress, defaultRsourceBingdingControllerCacheExpiration)
 	klog.Infof("Recorded endpoint for workload: %s/%s, progress: %v", namespace, name, progress)
+	for cluster, progress := range progress {
+		klog.Infof("Recorded endpoint for workload %s/%s, cluster: %s, progress: %v", namespace, name, cluster, progress)
+	}
 }
 
 func GetEndpointProgressFromCache(goCache *gocache.Cache, namespace, name string) (map[string]*ExpansionProgress, error) {
@@ -74,6 +77,22 @@ func GetEndpointProgressFromCache(goCache *gocache.Cache, namespace, name string
 	return progress, nil
 }
 
+func IsNeedCheckScaleUpThreshold(goCache *gocache.Cache, karmadaSearchCli *SKarmadaSearch, currCluster, namespace, name string) (bool, error) {
+	name = GetEndpointName(name)
+	progressMap, err := GetEndpointProgressFromCache(goCache, namespace, name)
+	if err != nil {
+		klog.Warningf("Get is need check scale up threshold failed, failed to get endpoint progress from cache: %w", err)
+		return false, fmt.Errorf("failed to get endpoint progress from cache: %w", err)
+	}
+
+	for _, progress := range progressMap {
+		if progress.ReplicasChangeStatus == workv1alpha2.ReplicaChangeStatusScalingUp {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func IsOtherReachScaleUpThreshold(goCache *gocache.Cache, karmadaSearchCli *SKarmadaSearch, currCluster, namespace, name string) (bool, error) {
 	name = GetEndpointName(name)
 	progressMap, err := GetEndpointProgressFromCache(goCache, namespace, name)
@@ -82,28 +101,26 @@ func IsOtherReachScaleUpThreshold(goCache *gocache.Cache, karmadaSearchCli *SKar
 	}
 
 	startTime := time.Now()
-	endpoints, err := karmadaSearchCli.GetEndpointsFromKarmadaSearch(types.NamespacedName{Namespace: namespace, Name: name})
+	latestEndpoints, err := karmadaSearchCli.GetEndpointsFromKarmadaSearch(types.NamespacedName{Namespace: namespace, Name: name})
 	if err != nil {
 		return false, fmt.Errorf("failed to get endpoints from karmadaSearch: %w", err)
 	}
-	clusterEndpointsMap, err := GetClusterEndpointMap(endpoints)
+	latestClusterEndpointsMap, err := GetClusterEndpointMap(latestEndpoints)
 	if err != nil {
 		return false, fmt.Errorf("failed to get cluster endpoint: %w", err)
 	}
-	klog.Infof("Success get endpoints from karmadaSearch for %s/%s took %v, clusterEndpointsMap: %+v", namespace, name, time.Since(startTime), clusterEndpointsMap)
+	klog.Infof("Success get endpoints from karmadaSearch for %s/%s took %v, latestClusterEndpointsMap: %+v", namespace, name, time.Since(startTime), latestClusterEndpointsMap)
 
-	var containScaleUpFlag bool
 	for cluster, progress := range progressMap {
 		if cluster == currCluster {
 			continue
 		}
-		endpointsCount, ok := clusterEndpointsMap[cluster]
+		endpointsCount, ok := latestClusterEndpointsMap[cluster]
 		if !ok {
 			continue
 		}
 		progress.CurrentEndpoints = endpointsCount
 		if progress.ReplicasChangeStatus == workv1alpha2.ReplicaChangeStatusScalingUp {
-			containScaleUpFlag = true
 			if progress.CurrentEndpoints > progress.BeginEndpoints {
 				klog.Infof("%s/%s cluster %s is scaling up, current endpoints: %d, begin endpoints: %d, reach scale up threshold",
 					namespace, name, cluster, progress.CurrentEndpoints, progress.BeginEndpoints)
@@ -116,9 +133,6 @@ func IsOtherReachScaleUpThreshold(goCache *gocache.Cache, karmadaSearchCli *SKar
 			}
 		}
 		progressMap[cluster] = progress
-	}
-	if containScaleUpFlag {
-		return false, nil
 	}
 	SyncEndpointProgressMapToCache(goCache, namespace, name, progressMap)
 	klog.Infof("no other cluster is scaling up, return true")

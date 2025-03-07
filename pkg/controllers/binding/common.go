@@ -144,13 +144,21 @@ func processEnsureWorkWithRetry(cache *gocache.Cache, client client.Client, karm
 
 	workloadKey := fmt.Sprintf("%s/%s", workload.GetNamespace(), workload.GetName())
 
+	needCheckScaleUpThreshold, _ := IsNeedCheckScaleUpThreshold(cache, karmadaSearchCli, targetCluster.Name, workload.GetNamespace(), workload.GetName())
+	if !needCheckScaleUpThreshold {
+		klog.Warningf("Failed to check is need check scale up threshold for %s",
+			workloadKey)
+		return processEnsureWork(client, resourceInterpreter, workload, overrideManager, binding, scope,
+			targetCluster, placement, replicas, jobCompletions, idx, conflictResolutionInBinding)
+	}
+
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		// Check if other clusters have reached scale up threshold
 		hasReachedThreshold, err := IsOtherReachScaleUpThreshold(cache, karmadaSearchCli, targetCluster.Name, workload.GetNamespace(), workload.GetName())
 		if err != nil {
 			klog.Warningf("Failed to check scale up threshold for %s in cluster %s (attempt %d/%d): %v",
 				workloadKey, targetCluster.Name, attempt, maxAttempts, err)
-			// Continue with retry even if check failed
+			break
 		}
 
 		klog.Infof("Scale up threshold check for %s in cluster %s (attempt %d/%d): reached=%v",
