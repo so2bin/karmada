@@ -57,10 +57,7 @@ func SyncEndpointProgressMapToCache(goCache *gocache.Cache, namespace, name stri
 	name = GetEndpointName(name)
 	key := fmt.Sprintf("endpoints-progress-%s-%s", namespace, name)
 	goCache.Set(key, progress, defaultRsourceBingdingControllerCacheExpiration)
-	klog.Infof("Recorded endpoint for workload: %s/%s, progress: %v", namespace, name, progress)
-	for cluster, progress := range progress {
-		klog.Infof("Recorded endpoint for workload %s/%s, cluster: %s, progress: %v", namespace, name, cluster, progress)
-	}
+	klog.Infof("SyncEndpointProgressMapToCache for workload %s/%s success, progress: %+v", namespace, name, progress)
 }
 
 func GetEndpointProgressFromCache(goCache *gocache.Cache, namespace, name string) (map[string]*ExpansionProgress, error) {
@@ -74,6 +71,7 @@ func GetEndpointProgressFromCache(goCache *gocache.Cache, namespace, name string
 	if !ok {
 		return nil, fmt.Errorf("endpoint %s is not map[string]*ExpansionProgress", key)
 	}
+	klog.Infof("GetEndpointProgressFromCache for workload %s/%s success, progress: %+v", namespace, name, progress)
 	return progress, nil
 }
 
@@ -135,6 +133,6 @@ func IsOtherReachScaleUpThreshold(goCache *gocache.Cache, karmadaSearchCli *SKar
 		progressMap[cluster] = progress
 	}
 	SyncEndpointProgressMapToCache(goCache, namespace, name, progressMap)
-	klog.Infof("no other cluster is scaling up, return true")
+	klog.Infof("%s/%s no other cluster is scaling up, return true", namespace, name)
 	return true, nil
 }

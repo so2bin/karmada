@@ -156,7 +156,7 @@ func processEnsureWorkWithRetry(cache *gocache.Cache, client client.Client, karm
 		// Check if other clusters have reached scale up threshold
 		hasReachedThreshold, err := IsOtherReachScaleUpThreshold(cache, karmadaSearchCli, targetCluster.Name, workload.GetNamespace(), workload.GetName())
 		if err != nil {
-			klog.Warningf("Failed to check scale up threshold for %s in cluster %s (attempt %d/%d): %v",
+			klog.Warningf("Failed to check scale up threshold check for %s in cluster %s (attempt %d/%d): %v",
 				workloadKey, targetCluster.Name, attempt, maxAttempts, err)
 			break
 		}
