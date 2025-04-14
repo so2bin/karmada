@@ -123,6 +123,11 @@ type ResourceInterpreterResponse struct {
 	// +optional
 	MinReplicas *int32 `json:"minReplicas,omitempty"`
 
+	// IsFixedReplicasToZero represents whether the object is fixed to zero replicas.
+	// Required if InterpreterOperation is InterpreterOperationInterpretFixedReplicas.
+	// +optional
+	IsFixedReplicasToZero *bool `json:"isFixedReplicasToZero,omitempty"`
+
 	// Dependencies represents the reference of dependencies object.
 	// Required if InterpreterOperation is InterpreterOperationInterpretDependency.
 	// +optional

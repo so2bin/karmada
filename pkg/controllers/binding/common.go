@@ -89,7 +89,9 @@ func ensureWork(
 	for i := range targetClusters {
 		targetCluster := targetClusters[i]
 		if isEnableDelayedScalingNs(workload.GetNamespace()) && isAtmsNodeCmName(workload.GetName()) &&
-			cache != nil && targetCluster.ReplicaChangeStatus == workv1alpha2.ReplicaChangeStatusScalingDown {
+			cache != nil && targetCluster.ReplicaChangeStatus == workv1alpha2.ReplicaChangeStatusScalingDown &&
+			!isFixedReplicasToZeroFromResourceInterpreter(resourceInterpreter, workload) {
+
 			wg.Add(1)
 			go func(targetCluster workv1alpha2.TargetCluster, i int) {
 				if err := processEnsureWorkWithRetry(cache, mem, &wg, client, karmadaSearchCli, resourceInterpreter, workload,
@@ -472,6 +474,16 @@ func getMinReplicasFromResourceInterpreter(resourceInterpreter resourceinterpret
 		return 0, err
 	}
 	return minReplicas, nil
+}
+
+func isFixedReplicasToZeroFromResourceInterpreter(resourceInterpreter resourceinterpreter.ResourceInterpreter, workload *unstructured.Unstructured) bool {
+	isFixedToZero, err := resourceInterpreter.IsFixedReplicasToZero(workload)
+	if err != nil {
+		klog.Errorf("Failed to get isFixedToZero for workload %s/%s, error: %v", workload.GetNamespace(), workload.GetName(), err)
+		return false
+	}
+	klog.Infof("IsFixedReplicasToZero for workload %s/%s: %t", workload.GetNamespace(), workload.GetName(), isFixedToZero)
+	return isFixedToZero
 }
 
 func getMinReplicasFromResourceTemplate(workload *unstructured.Unstructured) (int32, error) {
