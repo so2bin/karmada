@@ -49,6 +49,9 @@ type ResourceInterpreter interface {
 	// GetMinReplicas returns the minimum replicas of the object.
 	GetMinReplicas(object *unstructured.Unstructured) (replica int32, replicaRequires *workv1alpha2.ReplicaRequirements, err error)
 
+	// GetFixedReplicas returns the fixed replicas of the object.
+	// GetFixedReplicas(object *unstructured.Unstructured) (replica int32, err error)
+
 	// ReviseReplica revises the replica of the given object.
 	ReviseReplica(object *unstructured.Unstructured, replica int64) (*unstructured.Unstructured, error)
 

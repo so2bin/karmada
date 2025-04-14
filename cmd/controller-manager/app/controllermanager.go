@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -351,6 +352,7 @@ func startBindingController(ctx controllerscontext.Context) (enabled bool, err e
 		ResourceInterpreter: ctx.ResourceInterpreter,
 		RateLimiterOptions:  ctx.Opts.RateLimiterOptions,
 		GoCache:             gocache.New(5*time.Minute, 10*time.Minute),
+		CancelableTaskMem:   &sync.Map{},
 	}
 
 	restConfig := ctx.Mgr.GetConfig()
