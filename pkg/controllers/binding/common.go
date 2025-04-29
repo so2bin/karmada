@@ -17,6 +17,7 @@ limitations under the License.
 package binding
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -43,7 +44,8 @@ import (
 
 // ensureWork ensure Work to be created or updated.
 func ensureWork(
-	cache *gocache.Cache, client client.Client, karmadaSearchCli *SKarmadaSearch, resourceInterpreter resourceinterpreter.ResourceInterpreter, workload *unstructured.Unstructured,
+	cache *gocache.Cache, mem *sync.Map, client client.Client, karmadaSearchCli *SKarmadaSearch,
+	resourceInterpreter resourceinterpreter.ResourceInterpreter, workload *unstructured.Unstructured,
 	overrideManager overridemanager.OverrideManager, binding metav1.Object, scope apiextensionsv1.ResourceScope,
 ) error {
 	var targetClusters []workv1alpha2.TargetCluster
@@ -78,6 +80,7 @@ func ensureWork(
 			return err
 		}
 	}
+	klog.Infof("ensure work for %s/%s in cluster %v", workload.GetNamespace(), workload.GetName(), targetClusters)
 
 	// Create a wait group to track goroutines
 	var wg sync.WaitGroup
@@ -85,26 +88,20 @@ func ensureWork(
 	errChan := make(chan error, len(targetClusters))
 	for i := range targetClusters {
 		targetCluster := targetClusters[i]
-		needDelayedScaling := needDelayedScaling(targetClusters, targetCluster)
-
 		if isEnableDelayedScalingNs(workload.GetNamespace()) && isAtmsNodeCmName(workload.GetName()) &&
-			needDelayedScaling && cache != nil {
-			klog.Infof("%s/%s is scaling down in cluster %s and other clusters is scaling up, delay to process ensureWork",
-				workload.GetNamespace(), workload.GetName(), targetCluster.Name)
-			wg.Add(1)
+			cache != nil && targetCluster.ReplicaChangeStatus == workv1alpha2.ReplicaChangeStatusScalingDown &&
+			!isFixedReplicasToZeroFromResourceInterpreter(resourceInterpreter, workload) {
 
+			wg.Add(1)
 			go func(targetCluster workv1alpha2.TargetCluster, i int) {
-				defer wg.Done()
-				if err := processEnsureWorkWithRetry(cache, client, karmadaSearchCli, resourceInterpreter, workload,
+				if err := processEnsureWorkWithRetry(cache, mem, &wg, client, karmadaSearchCli, resourceInterpreter, workload,
 					overrideManager, binding, scope, targetCluster, placement, replicas,
 					jobCompletions, i, conflictResolutionInBinding); err != nil {
-
-					klog.Errorf("Error processing target cluster %s: %v", targetCluster.Name, err)
+					klog.Errorf("ensure work with retry gortinue for %s/%s in cluster %s failed: %v", workload.GetNamespace(), workload.GetName(), targetCluster.Name, err)
 					errChan <- err
 				}
 			}(targetCluster, i)
 		} else {
-			klog.Infof("%s/%s is scaling up in cluster %s, going to process ensureWork", workload.GetNamespace(), workload.GetName(), targetCluster.Name)
 			if err := processEnsureWork(client, resourceInterpreter, workload, overrideManager, binding, scope, targetCluster, placement, replicas,
 				jobCompletions, i, conflictResolutionInBinding); err != nil {
 				return err
@@ -125,64 +122,128 @@ func ensureWork(
 		close(errChan)
 		for err := range errChan {
 			if err != nil {
+				klog.Errorf("error during async processing: %v", err)
 				return fmt.Errorf("error during async processing: %v", err)
 			}
 		}
 		return nil
 	case <-time.After(time.Duration(EnvDelayedScalingTimeoutSecond) * time.Second):
-		return fmt.Errorf("timeout waiting for delayed scaling operations to complete")
+		klog.Info("timeout waiting for delayed scaling operations to complete")
+		return nil
 	}
 }
 
-func processEnsureWorkWithRetry(cache *gocache.Cache, client client.Client, karmadaSearchCli *SKarmadaSearch, resourceInterpreter resourceinterpreter.ResourceInterpreter,
+type CancelableTask struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+func processEnsureWorkWithRetry(cache *gocache.Cache, mem *sync.Map, wg *sync.WaitGroup, client client.Client, karmadaSearchCli *SKarmadaSearch, resourceInterpreter resourceinterpreter.ResourceInterpreter,
 	workload *unstructured.Unstructured, overrideManager overridemanager.OverrideManager, binding metav1.Object, scope apiextensionsv1.ResourceScope,
 	targetCluster workv1alpha2.TargetCluster, placement *policyv1alpha1.Placement, replicas int32,
 	jobCompletions []workv1alpha2.TargetCluster, idx int, conflictResolutionInBinding policyv1alpha1.ConflictResolution) error {
 
-	sleepDuration := time.Duration(EnvDelayedScalingSleepDurationSecond) * time.Second
-	maxAttempts := int(EnvDelayedScalingTimeoutSecond / int(sleepDuration.Seconds()))
+	defer func() {
+		key := fmt.Sprintf("%s-%s-%s", targetCluster.Name, workload.GetNamespace(), workload.GetName())
+		cleanUpEnsureWorkRetryGortinue(cache, mem, wg, key)
+		wg.Done()
+	}()
 
-	workloadKey := fmt.Sprintf("%s/%s", workload.GetNamespace(), workload.GetName())
+	klog.Infof("ensure work retry gortinue ensureWork for %s/%s in cluster %s started\n", workload.GetNamespace(), workload.GetName(), targetCluster.Name)
 
-	needCheckScaleUpThreshold, _ := IsNeedCheckScaleUpThreshold(cache, karmadaSearchCli, targetCluster.Name, workload.GetNamespace(), workload.GetName())
-	if !needCheckScaleUpThreshold {
-		klog.Warningf("Failed to check is need check scale up threshold for %s",
-			workloadKey)
-		return processEnsureWork(client, resourceInterpreter, workload, overrideManager, binding, scope,
-			targetCluster, placement, replicas, jobCompletions, idx, conflictResolutionInBinding)
+	key := fmt.Sprintf("%s-%s-%s", targetCluster.Name, workload.GetNamespace(), workload.GetName())
+
+	// if current ensure work retry gortinue already exists, cancel old gortinue and release lock
+	if value, exists := mem.Load(key); exists {
+		cancelableTask := value.(CancelableTask)
+		if exists {
+			oldCancel := cancelableTask.cancel
+			if oldCancel != nil {
+				klog.Infof("ensure work retry gortinue ensureWork for %s/%s in cluster %s old gortinue going to cancel...\n",
+					workload.GetNamespace(), workload.GetName(), targetCluster.Name)
+				oldCancel()
+				time.Sleep(1 * time.Second)
+			}
+		}
 	}
 
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		// Check if other clusters have reached scale up threshold
-		hasReachedThreshold, err := IsOtherReachScaleUpThreshold(cache, karmadaSearchCli, targetCluster.Name, workload.GetNamespace(), workload.GetName())
+	// create new context and cancel function for new gortinue, store in mem
+	ctx, cancel := context.WithCancel(context.Background())
+	klog.Infof("ensure work retry gortinue ensureWork for %s/%s in cluster %s new gortinue started\n",
+		workload.GetNamespace(), workload.GetName(), targetCluster.Name)
+	mem.Store(key, CancelableTask{
+		ctx:    ctx,
+		cancel: cancel,
+	})
+
+	// create timeout context for new gortinue, help to release lock after timeout
+	timeoutCtx, timeoutCancel := context.WithTimeout(context.Background(), time.Duration(EnvDelayedScalingTimeoutSecond)*time.Second)
+	defer timeoutCancel()
+
+	var tryCount int
+	maxTryCount := EnvDelayedScalingTimeoutSecond / EnvDelayedScalingSleepDurationSecond
+	for {
+		tryCount += 1
+		reached, err := IsOtherReachScaleUpThreshold(cache, karmadaSearchCli, targetCluster.Name, workload.GetNamespace(), workload.GetName())
 		if err != nil {
-			klog.Warningf("Failed to check scale up threshold for %s in cluster %s (attempt %d/%d): %v",
-				workloadKey, targetCluster.Name, attempt, maxAttempts, err)
+			klog.Warningf("Failed to check scale up threshold check for %s/%s in cluster %s: %v",
+				workload.GetNamespace(), workload.GetName(), targetCluster.Name, err)
 			break
 		}
+		klog.Infof("ensure work retry gortinue ensureWork for %s/%s in cluster %s try %d/%d times, other cluster reached=%v",
+			workload.GetNamespace(), workload.GetName(), targetCluster.Name, tryCount, maxTryCount, reached)
 
-		klog.Infof("Scale up threshold check for %s in cluster %s (attempt %d/%d): reached=%v",
-			workloadKey, targetCluster.Name, attempt, maxAttempts, hasReachedThreshold)
-
-		if hasReachedThreshold {
-			klog.Infof("Scale up threshold reached for %s in cluster %s, process ensureWork",
-				workloadKey, targetCluster.Name)
+		select {
+		case <-ctx.Done():
+			klog.Infof("ensure work retry gortinue ensureWork for %s/%s in cluster %s cancelled\n",
+				workload.GetNamespace(), workload.GetName(), targetCluster.Name)
+			return nil
+		case <-timeoutCtx.Done():
+			klog.Infof("ensure work retry gortinue ensureWork for %s/%s in cluster %s %v timeout\n",
+				workload.GetNamespace(), workload.GetName(), targetCluster.Name, time.Duration(EnvDelayedScalingTimeoutSecond)*time.Second)
 			return processEnsureWork(client, resourceInterpreter, workload, overrideManager, binding, scope,
 				targetCluster, placement, replicas, jobCompletions, idx, conflictResolutionInBinding)
-		}
-
-		if attempt < maxAttempts {
-			time.Sleep(sleepDuration)
+		default:
+			if !reached {
+				klog.Infof("ensure work retry gortinue ensureWork for %s/%s in cluster %s not reach, try %d times, still waiting...\n",
+					workload.GetNamespace(), workload.GetName(), targetCluster.Name, tryCount)
+			} else {
+				klog.Infof("ensure work retry gortinue ensureWork for %s/%s in cluster %s has reached, going to distribute!!!!\n",
+					workload.GetNamespace(), workload.GetName(), targetCluster.Name)
+				return processEnsureWork(client, resourceInterpreter, workload, overrideManager, binding, scope,
+					targetCluster, placement, replicas, jobCompletions, idx, conflictResolutionInBinding)
+			}
+			time.Sleep(time.Duration(EnvDelayedScalingSleepDurationSecond) * time.Second)
 		}
 	}
+	return nil
+}
 
-	klog.Warningf("Timeout waiting for scale up threshold, process ensureWork for %s in cluster %s",
-		workloadKey, targetCluster.Name)
+func cleanUpEnsureWorkRetryGortinue(cache *gocache.Cache, mem *sync.Map, wg *sync.WaitGroup, key string) {
+	if value, exists := mem.Load(key); exists {
+		cancelableTask := value.(CancelableTask)
+		if exists {
+			oldCancel := cancelableTask.cancel
+			if oldCancel != nil {
+				klog.Infof("ensure work retry gortinue %s old gortinue going to cancel...", key)
+				oldCancel()
+				time.Sleep(1 * time.Second)
+			}
+		}
+		mem.Delete(key)
+		// 打印 mem 中的所有 key
+		allTasks := GetAllTasks(mem)
+		klog.Infof("cleaned up ensure work retry gortinue %s, current exist %d tasks: %v\n", key, len(allTasks), allTasks)
+	}
+}
 
-	// Fallback: process work creation even if threshold was never reached
-	klog.Infof("reached the scale up threshold, going to process ensureWork for %s/%s in cluster %s", workload.GetNamespace(), workload.GetName(), targetCluster.Name)
-	return processEnsureWork(client, resourceInterpreter, workload, overrideManager, binding, scope,
-		targetCluster, placement, replicas, jobCompletions, idx, conflictResolutionInBinding)
+func GetAllTasks(mem *sync.Map) []string {
+	result := []string{}
+	mem.Range(func(key, value interface{}) bool {
+		result = append(result, key.(string))
+		return true
+	})
+	return result
 }
 
 func processEnsureWork(
@@ -191,6 +252,8 @@ func processEnsureWork(
 	targetCluster workv1alpha2.TargetCluster, placement *policyv1alpha1.Placement, replicas int32,
 	jobCompletions []workv1alpha2.TargetCluster, idx int, conflictResolutionInBinding policyv1alpha1.ConflictResolution,
 ) error {
+	klog.Infof("ensure work for %s/%s in cluster %s", workload.GetNamespace(), workload.GetName(), targetCluster.Name)
+
 	var err error
 	clonedWorkload := workload.DeepCopy()
 
@@ -390,20 +453,6 @@ func isAtmsNodeCmName(name string) bool {
 	return strings.HasPrefix(name, ATMSNodeCmPrefix)
 }
 
-func needDelayedScaling(targetClusters []workv1alpha2.TargetCluster, currentCluster workv1alpha2.TargetCluster) bool {
-	containScaleUpFlag := false
-	for _, cluster := range targetClusters {
-		if cluster.ReplicaChangeStatus == workv1alpha2.ReplicaChangeStatusScalingUp {
-			containScaleUpFlag = true
-			break
-		}
-	}
-	if containScaleUpFlag {
-		return currentCluster.ReplicaChangeStatus == workv1alpha2.ReplicaChangeStatusScalingDown
-	}
-	return false
-}
-
 // KNodeScale app node scaleobject
 type KNodeScale struct {
 	CooldownPeriod   *int32 `json:"cooldownPeriod,omitempty" bson:"cooldownPeriod,omitempty"`
@@ -413,6 +462,7 @@ type KNodeScale struct {
 	MinReplicas      int    `json:"minReplicas" yaml:"minReplicas"`
 	MaxReplicas      int    `json:"maxReplicas" yaml:"maxReplicas"`
 }
+
 type KAppNodeCmData struct {
 	Scale *KNodeScale `json:"scale" yaml:"scale"`
 }
@@ -424,6 +474,16 @@ func getMinReplicasFromResourceInterpreter(resourceInterpreter resourceinterpret
 		return 0, err
 	}
 	return minReplicas, nil
+}
+
+func isFixedReplicasToZeroFromResourceInterpreter(resourceInterpreter resourceinterpreter.ResourceInterpreter, workload *unstructured.Unstructured) bool {
+	isFixedToZero, err := resourceInterpreter.IsFixedReplicasToZero(workload)
+	if err != nil {
+		klog.Errorf("Failed to get isFixedToZero for workload %s/%s, error: %v", workload.GetNamespace(), workload.GetName(), err)
+		return false
+	}
+	klog.Infof("IsFixedReplicasToZero for workload %s/%s: %t", workload.GetNamespace(), workload.GetName(), isFixedToZero)
+	return isFixedToZero
 }
 
 func getMinReplicasFromResourceTemplate(workload *unstructured.Unstructured) (int32, error) {
@@ -550,13 +610,16 @@ func recordBeginEndpoint(gocache *gocache.Cache, karmadaSearchCli *SKarmadaSearc
 			LastUpdate:           time.Now(),
 		}
 		if replicasSum > 0 {
-			progress.FinMinReplicas = minReplicas * int(targetCluster.Replicas) / replicasSum
+			finalMinReplicas := minReplicas * int(targetCluster.Replicas) / replicasSum
+			progress.FinalMinReplicas = finalMinReplicas
+
 			klog.Infof("%s/%s cluster %s progress.FinMinReplicas: (%d * %d) / %d= %d", workload.GetNamespace(), workload.GetName(), clusterName,
-				minReplicas, targetCluster.Replicas, replicasSum, progress.FinMinReplicas)
+				minReplicas, targetCluster.Replicas, replicasSum, progress.FinalMinReplicas)
 		}
 		endpointProgressMap[clusterName] = progress
 	}
 
+	klog.Infof("Sync begin endpoint progress map to cache for %s/%s, endpointProgressMap: %v", workload.GetNamespace(), workload.GetName(), endpointProgressMap)
 	SyncEndpointProgressMapToCache(gocache, workload.GetNamespace(), workload.GetName(), endpointProgressMap)
 	return nil
 }

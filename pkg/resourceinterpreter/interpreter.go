@@ -49,6 +49,9 @@ type ResourceInterpreter interface {
 	// GetMinReplicas returns the minimum replicas of the object.
 	GetMinReplicas(object *unstructured.Unstructured) (replica int32, replicaRequires *workv1alpha2.ReplicaRequirements, err error)
 
+	// IsFixedReplicasToZero returns the isFixedToZero of the object.
+	IsFixedReplicasToZero(object *unstructured.Unstructured) (isFixedToZero bool, err error)
+
 	// ReviseReplica revises the replica of the given object.
 	ReviseReplica(object *unstructured.Unstructured, replica int64) (*unstructured.Unstructured, error)
 
@@ -160,6 +163,18 @@ func (i *customResourceInterpreterImpl) GetMinReplicas(object *unstructured.Unst
 		return
 	}
 
+	return
+}
+
+// IsFixedReplicasToZero returns the isFixedToZero of the object.
+func (i *customResourceInterpreterImpl) IsFixedReplicasToZero(object *unstructured.Unstructured) (isFixedToZero bool, err error) {
+	isFixedToZero, _, err = i.customizedInterpreter.IsFixedReplicasToZero(context.TODO(), &request.Attributes{
+		Operation: configv1alpha1.InterpreterOperationInterpretReplica,
+		Object:    object,
+	})
+	if err != nil {
+		return
+	}
 	return
 }
 

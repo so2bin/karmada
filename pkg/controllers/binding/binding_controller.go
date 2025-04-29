@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"time"
 
@@ -72,8 +73,9 @@ type ResourceBindingController struct {
 	ResourceInterpreter         resourceinterpreter.ResourceInterpreter
 	RateLimiterOptions          ratelimiterflag.Options
 
-	KarmadaSearchCli *SKarmadaSearch // used to get endpoints from karmada search
-	GoCache          *gocache.Cache
+	KarmadaSearchCli  *SKarmadaSearch // used to get endpoints from karmada search
+	GoCache           *gocache.Cache
+	CancelableTaskMem *sync.Map
 }
 
 // Reconcile performs a full reconciliation for the object referred to by the Request.
@@ -144,7 +146,7 @@ func (c *ResourceBindingController) syncBinding(binding *workv1alpha2.ResourceBi
 			klog.Errorf("recordBeginEndpoint error: %v", err)
 		}
 	}
-	err = ensureWork(c.GoCache, c.Client, c.KarmadaSearchCli, c.ResourceInterpreter, workload, c.OverrideManager, binding, apiextensionsv1.NamespaceScoped)
+	err = ensureWork(c.GoCache, c.CancelableTaskMem, c.Client, c.KarmadaSearchCli, c.ResourceInterpreter, workload, c.OverrideManager, binding, apiextensionsv1.NamespaceScoped)
 	metrics.ObserveSyncWorkLatency(err, start)
 	if err != nil {
 		klog.Errorf("Failed to transform resourceBinding(%s/%s) to works. Error: %v.",

@@ -35,14 +35,15 @@ type Attributes struct {
 
 // ResponseAttributes contains the attributes that response by the webhook.
 type ResponseAttributes struct {
-	Successful          bool
-	Status              configv1alpha1.RequestStatus
-	Replicas            int32
-	MinReplicas         int32
-	ReplicaRequirements *workv1alpha2.ReplicaRequirements
-	Dependencies        []configv1alpha1.DependentObjectReference
-	Patch               []byte
-	PatchType           configv1alpha1.PatchType
-	RawStatus           runtime.RawExtension
-	Healthy             bool
+	Successful            bool
+	Status                configv1alpha1.RequestStatus
+	Replicas              int32
+	MinReplicas           int32
+	IsFixedReplicasToZero bool
+	ReplicaRequirements   *workv1alpha2.ReplicaRequirements
+	Dependencies          []configv1alpha1.DependentObjectReference
+	Patch                 []byte
+	PatchType             configv1alpha1.PatchType
+	RawStatus             runtime.RawExtension
+	Healthy               bool
 }
