@@ -58,9 +58,11 @@ func SyncEndpointProgressMapToCache(goCache *gocache.Cache, namespace, name stri
 	name = GetEndpointName(name)
 	key := fmt.Sprintf("endpoints-progress-%s-%s", namespace, name)
 	goCache.Set(key, progress, defaultRsourceBingdingControllerCacheExpiration)
+	var progressStatus string
 	for cluster, progress := range progress {
-		klog.Infof("SyncEndpointProgressMapToCache for workload %s/%s cluster %s progress: %+v", namespace, name, cluster, *progress)
+		progressStatus += fmt.Sprintf("cluster %s progress: %+v; ", cluster, *progress)
 	}
+	klog.Infof("Sync endpoint progress map to go cache for workload %s/%s: %s", namespace, name, progressStatus)
 }
 
 func GetEndpointProgressFromCache(goCache *gocache.Cache, namespace, name string) (map[string]*ExpansionProgress, error) {
@@ -74,7 +76,11 @@ func GetEndpointProgressFromCache(goCache *gocache.Cache, namespace, name string
 	if !ok {
 		return nil, fmt.Errorf("endpoint %s is not map[string]*ExpansionProgress", key)
 	}
-	klog.Infof("GetEndpointProgressFromCache for workload %s/%s success, progress: %+v", namespace, name, progress)
+	var progressStatus string
+	for cluster, clusterEndpointsMaprogress := range progress {
+		progressStatus += fmt.Sprintf("cluster %s progress: %+v; ", cluster, *clusterEndpointsMaprogress)
+	}
+	klog.Infof("Get endpoint progress from go cache for workload %s/%s: %s", namespace, name, progressStatus)
 	return progress, nil
 }
 

@@ -149,7 +149,7 @@ func processEnsureWorkWithRetry(cache *gocache.Cache, mem *sync.Map, wg *sync.Wa
 		wg.Done()
 	}()
 
-	klog.Infof("ensure work retry gortinue ensureWork for %s/%s in cluster %s started\n", workload.GetNamespace(), workload.GetName(), targetCluster.Name)
+	klog.Infof("Start ensure work retry gortinue ensureWork for %s/%s in cluster %s\n", workload.GetNamespace(), workload.GetName(), targetCluster.Name)
 
 	key := fmt.Sprintf("%s-%s-%s", targetCluster.Name, workload.GetNamespace(), workload.GetName())
 
@@ -159,7 +159,7 @@ func processEnsureWorkWithRetry(cache *gocache.Cache, mem *sync.Map, wg *sync.Wa
 		if exists {
 			oldCancel := cancelableTask.cancel
 			if oldCancel != nil {
-				klog.Infof("ensure work retry gortinue ensureWork for %s/%s in cluster %s old gortinue going to cancel...\n",
+				klog.Infof("ensure work retry gortinue ensureWork for %s/%s in cluster %s already exists, old gortinue going to cancel...\n",
 					workload.GetNamespace(), workload.GetName(), targetCluster.Name)
 				oldCancel()
 				time.Sleep(1 * time.Second)
@@ -225,7 +225,7 @@ func cleanUpEnsureWorkRetryGortinue(cache *gocache.Cache, mem *sync.Map, wg *syn
 		if exists {
 			oldCancel := cancelableTask.cancel
 			if oldCancel != nil {
-				klog.Infof("ensure work retry gortinue %s old gortinue going to cancel...", key)
+				klog.Infof("ensure work retry gortinue %s old gortinue going to clean up...", key)
 				oldCancel()
 				time.Sleep(1 * time.Second)
 			}
@@ -619,7 +619,11 @@ func recordBeginEndpoint(gocache *gocache.Cache, karmadaSearchCli *SKarmadaSearc
 		endpointProgressMap[clusterName] = progress
 	}
 
-	klog.Infof("Sync begin endpoint progress map to cache for %s/%s, endpointProgressMap: %v", workload.GetNamespace(), workload.GetName(), endpointProgressMap)
+	var progressStatus string
+	for cluster, progress := range endpointProgressMap {
+		progressStatus += fmt.Sprintf("cluster %s progress: %+v; ", cluster, *progress)
+	}
+	klog.Infof("Sync begin endpoint progress map to go cache for %s/%s: %s", workload.GetNamespace(), workload.GetName(), progressStatus)
 	SyncEndpointProgressMapToCache(gocache, workload.GetNamespace(), workload.GetName(), endpointProgressMap)
 	return nil
 }
