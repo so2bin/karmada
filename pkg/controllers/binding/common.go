@@ -213,7 +213,17 @@ func processEnsureWorkWithRetry(cache *gocache.Cache, mem *sync.Map, wg *sync.Wa
 				return processEnsureWork(client, resourceInterpreter, workload, overrideManager, binding, scope,
 					targetCluster, placement, replicas, jobCompletions, idx, conflictResolutionInBinding)
 			}
-			time.Sleep(time.Duration(EnvDelayedScalingSleepDurationSecond) * time.Second)
+			sleepTimer := time.NewTimer(time.Duration(EnvDelayedScalingSleepDurationSecond) * time.Second)
+			select {
+			case <-ctx.Done():
+				sleepTimer.Stop()
+				klog.Infof("ensure work retry gortinue ensureWork for %s/%s in cluster %s cancelled during sleep",
+					workload.GetNamespace(), workload.GetName(), targetCluster.Name)
+				return fmt.Errorf("cancelled during sleep")
+			case <-sleepTimer.C:
+				klog.Infof("ensure work retry gortinue ensureWork for %s/%s in cluster %s sleep %d seconds",
+					workload.GetNamespace(), workload.GetName(), targetCluster.Name, EnvDelayedScalingSleepDurationSecond)
+			}
 		}
 	}
 	return nil
