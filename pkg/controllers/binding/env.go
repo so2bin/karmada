@@ -41,7 +41,17 @@ func GetEnvDefaultInt(key string, defval int) int {
 	return val
 }
 
-var EnvEnableDelayedScalingNamespace string = GetEnvDefaultString("ENABLE_DELAYED_SCALING_NAMESPACE", "tmp-test-dev-3,atms-oversea-test,lwd-test2")
+func GetEnvDefaultBool(key string, defval bool) bool {
+	env := os.Getenv(key)
+	if env == "" {
+		return defval
+	}
+	return env == "true"
+}
+
+var EnvEnableDelayedScalingNamespace string = GetEnvDefaultString("ENABLE_DELAYED_SCALING_NAMESPACE", "tmp-test-dev-3,atms-oversea-test,lwd-test2,ai-app-test,ai-nlp-llm-test")
+
+var EnvEnableDelayedScalingAllTestNamespace bool = GetEnvDefaultBool("ENABLE_DELAYED_SCALING_ALL_TEST_NAMESPACE", false)
 
 var EnvDelayedScalingTimeoutSecond int = GetEnvDefaultInt("DELAYED_SCALING_TIMEOUT_SECOND", 1800)
 
