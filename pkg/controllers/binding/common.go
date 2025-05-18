@@ -450,12 +450,18 @@ func needReviseReplicas(replicas int32, placement *policyv1alpha1.Placement) boo
 }
 
 func isEnableDelayedScalingNs(ns string) bool {
+	if EnvEnableDelayedScalingAllTestNamespace && strings.HasSuffix(ns, "-test") {
+		klog.Infof("ns: %s is test namespace, EnvEnableDelayedScalingAllTestNamespace is %v, return true", ns, EnvEnableDelayedScalingAllTestNamespace)
+		return true
+	}
 	nss := strings.Split(EnvEnableDelayedScalingNamespace, ",")
 	for _, n := range nss {
 		if n == ns {
+			klog.Infof("ns: %s is in EnvEnableDelayedScalingNamespace: %s, return true", ns, EnvEnableDelayedScalingNamespace)
 			return true
 		}
 	}
+	klog.Infof("ns: %s is not in EnvEnableDelayedScalingNamespace: %s, return false", ns, EnvEnableDelayedScalingNamespace)
 	return false
 }
 
