@@ -19,13 +19,16 @@ package core
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	clusterv1alpha1 "github.com/karmada-io/karmada/pkg/apis/cluster/v1alpha1"
 	policyv1alpha1 "github.com/karmada-io/karmada/pkg/apis/policy/v1alpha1"
 	workv1alpha2 "github.com/karmada-io/karmada/pkg/apis/work/v1alpha2"
+	"github.com/karmada-io/karmada/pkg/controllers/binding"
 	"github.com/karmada-io/karmada/pkg/scheduler/framework"
 	"github.com/karmada-io/karmada/pkg/util"
 	"github.com/karmada-io/karmada/pkg/util/helper"
+	"k8s.io/klog/v2"
 )
 
 // TargetClustersList is a slice of TargetCluster that implements sort.Interface to sort by Value.
@@ -92,6 +95,12 @@ func dynamicDivideReplicas(state *assignState) ([]workv1alpha2.TargetCluster, er
 	case DynamicWeightStrategy:
 		// Set the availableClusters as the weight, scheduledClusters as init result, target as the dispenser object.
 		// After dispensing, the target cluster will be the combination of init result and weighted result for target replicas.
+		klog.Infof("Distribute %s/%s with DynamicWeightStrategy", state.spec.Resource.Name, state.spec.Resource.Kind)
+		if strings.HasPrefix(state.spec.Resource.Name, binding.ATMSNodeCmPrefix) && state.spec.Resource.Kind == "ConfigMap" {
+			result := helper.SpreadReplicasByTargetClustersWithRandom(state.spec.Resource.Name, state.targetReplicas, state.availableClusters, state.scheduledClusters)
+			klog.Infof("Distribute %s with SpreadReplicasByTargetClustersWithRandom result: %v", state.spec.Resource.Name, result)
+			return result, nil
+		}
 		return helper.SpreadReplicasByTargetClusters(state.targetReplicas, state.availableClusters, state.scheduledClusters), nil
 	default:
 		// should never happen

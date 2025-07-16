@@ -126,6 +126,7 @@ func ensureWork(
 				return fmt.Errorf("error during async processing: %v", err)
 			}
 		}
+		klog.Infof("ensure work for %s/%s in cluster %v done", workload.GetNamespace(), workload.GetName(), targetClusters)
 		return nil
 	case <-time.After(time.Duration(EnvDelayedScalingTimeoutSecond) * time.Second):
 		klog.Info("timeout waiting for delayed scaling operations to complete")

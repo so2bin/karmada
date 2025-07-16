@@ -118,7 +118,7 @@ func IsOtherReachScaleUpThreshold(goCache *gocache.Cache, karmadaSearchCli *SKar
 			scalingUpClusters = append(scalingUpClusters, cluster)
 			isHasScalingUpCluster = true
 			if progress.CurrentEndpoints >= int(math.Ceil(float64(progress.FinalMinReplicas)*0.25)) {
-				klog.Infof("%s/%s/%s is scaling up, current endpoints: %d, final min replicas: %d, reach scale up threshold",
+				klog.Infof("%s/%s/%s is scaling up, current endpoints: %d, final min replicas: %d, ensure work retry gortinue will reached scale up threshold",
 					currCluster, namespace, name, progress.CurrentEndpoints, progress.FinalMinReplicas)
 				return true, nil
 			}
