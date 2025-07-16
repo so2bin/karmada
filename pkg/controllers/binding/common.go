@@ -82,8 +82,6 @@ func ensureWork(
 	}
 	klog.Infof("ensure work for %s/%s in cluster %v", workload.GetNamespace(), workload.GetName(), targetClusters)
 
-	// Create a wait group to track goroutines
-	var wg sync.WaitGroup
 	// Create error channel to collect errors from goroutines
 	errChan := make(chan error, len(targetClusters))
 	for i := range targetClusters {
@@ -92,9 +90,8 @@ func ensureWork(
 			cache != nil && targetCluster.ReplicaChangeStatus == workv1alpha2.ReplicaChangeStatusScalingDown &&
 			!isFixedReplicasToZeroFromResourceInterpreter(resourceInterpreter, workload) {
 
-			wg.Add(1)
 			go func(targetCluster workv1alpha2.TargetCluster, i int) {
-				if err := processEnsureWorkWithRetry(cache, mem, &wg, client, karmadaSearchCli, resourceInterpreter, workload,
+				if err := processEnsureWorkWithRetry(cache, mem, client, karmadaSearchCli, resourceInterpreter, workload,
 					overrideManager, binding, scope, targetCluster, placement, replicas,
 					jobCompletions, i, conflictResolutionInBinding); err != nil {
 					klog.Errorf("ensure work with retry gortinue for %s/%s in cluster %s failed: %v", workload.GetNamespace(), workload.GetName(), targetCluster.Name, err)
@@ -108,30 +105,7 @@ func ensureWork(
 			}
 		}
 	}
-	// Create a channel to signal WaitGroup completion
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-
-	// Wait for either completion or timeout
-	select {
-	case <-done:
-		// Check if there were any errors
-		close(errChan)
-		for err := range errChan {
-			if err != nil {
-				klog.Errorf("error during async processing: %v", err)
-				return fmt.Errorf("error during async processing: %v", err)
-			}
-		}
-		klog.Infof("ensure work for %s/%s in cluster %v done", workload.GetNamespace(), workload.GetName(), targetClusters)
-		return nil
-	case <-time.After(time.Duration(EnvDelayedScalingTimeoutSecond) * time.Second):
-		klog.Info("timeout waiting for delayed scaling operations to complete")
-		return nil
-	}
+	return nil
 }
 
 type CancelableTask struct {
@@ -139,15 +113,14 @@ type CancelableTask struct {
 	cancel context.CancelFunc
 }
 
-func processEnsureWorkWithRetry(cache *gocache.Cache, mem *sync.Map, wg *sync.WaitGroup, client client.Client, karmadaSearchCli *SKarmadaSearch, resourceInterpreter resourceinterpreter.ResourceInterpreter,
+func processEnsureWorkWithRetry(cache *gocache.Cache, mem *sync.Map, client client.Client, karmadaSearchCli *SKarmadaSearch, resourceInterpreter resourceinterpreter.ResourceInterpreter,
 	workload *unstructured.Unstructured, overrideManager overridemanager.OverrideManager, binding metav1.Object, scope apiextensionsv1.ResourceScope,
 	targetCluster workv1alpha2.TargetCluster, placement *policyv1alpha1.Placement, replicas int32,
 	jobCompletions []workv1alpha2.TargetCluster, idx int, conflictResolutionInBinding policyv1alpha1.ConflictResolution) error {
 
 	defer func() {
 		key := fmt.Sprintf("%s-%s-%s", targetCluster.Name, workload.GetNamespace(), workload.GetName())
-		cleanUpEnsureWorkRetryGortinue(cache, mem, wg, key)
-		wg.Done()
+		cleanUpEnsureWorkRetryGortinue(cache, mem, key)
 	}()
 
 	klog.Infof("Start ensure work retry gortinue ensureWork for %s/%s in cluster %s\n", workload.GetNamespace(), workload.GetName(), targetCluster.Name)
@@ -230,7 +203,7 @@ func processEnsureWorkWithRetry(cache *gocache.Cache, mem *sync.Map, wg *sync.Wa
 	return nil
 }
 
-func cleanUpEnsureWorkRetryGortinue(cache *gocache.Cache, mem *sync.Map, wg *sync.WaitGroup, key string) {
+func cleanUpEnsureWorkRetryGortinue(cache *gocache.Cache, mem *sync.Map, key string) {
 	if value, exists := mem.Load(key); exists {
 		cancelableTask := value.(CancelableTask)
 		if exists {
