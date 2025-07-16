@@ -53,6 +53,6 @@ var EnvEnableDelayedScalingNamespace string = GetEnvDefaultString("ENABLE_DELAYE
 
 var EnvEnableDelayedScalingAllTestNamespace bool = GetEnvDefaultBool("ENABLE_DELAYED_SCALING_ALL_TEST_NAMESPACE", false)
 
-var EnvDelayedScalingTimeoutSecond int = GetEnvDefaultInt("DELAYED_SCALING_TIMEOUT_SECOND", 1800)
+var EnvDelayedScalingTimeoutSecond int = GetEnvDefaultInt("DELAYED_SCALING_TIMEOUT_SECOND", 180)
 
 var EnvDelayedScalingSleepDurationSecond int = GetEnvDefaultInt("DELAYED_SCALING_SLEEP_DURATION_SECOND", 20)

@@ -107,6 +107,11 @@ func IsOtherReachScaleUpThreshold(goCache *gocache.Cache, karmadaSearchCli *SKar
 
 	for cluster, progress := range progressMap {
 		if cluster == currCluster {
+			// if current endpoints is 0, return true
+			if progress.CurrentEndpoints == 0 || progress.BeginEndpoints == 0 {
+				klog.Infof("%s/%s/%s current endpoints is 0, return true, progress: %+v", cluster, namespace, name, *progress)
+				return true, nil
+			}
 			continue
 		}
 		endpointsCount, ok := latestClusterEndpointsMap[cluster]
