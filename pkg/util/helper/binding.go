@@ -19,7 +19,9 @@ package helper
 import (
 	"context"
 	"crypto/rand"
+	"fmt"
 	"math/big"
+	mathrand "math/rand"
 	"sort"
 
 	corev1 "k8s.io/api/core/v1"
@@ -158,6 +160,195 @@ func (a *Dispenser) TakeByWeight(w ClusterWeightInfoList) {
 	klog.Infof("TakeByWeight remain: %d, result: %v", remain, a.Result)
 }
 
+// TakeByWeightWithRandom divide replicas by a weight list and merge the result into previous result.
+func (a *Dispenser) TakeByWeightWithRandom(name string, w ClusterWeightInfoList) {
+	if a.Done() {
+		return
+	}
+	sum := w.GetWeightSum()
+	if sum == 0 {
+		return
+	}
+
+	result := make([]workv1alpha2.TargetCluster, 0, w.Len())
+
+	// 转换为 weightMap 格式
+	weightMap := make(map[string]int)
+	for _, info := range w {
+		weightMap[info.ClusterName] = int(info.Weight)
+	}
+
+	var remain int = int(a.NumReplicas)
+	clusterReplicas := Distribute(remain, weightMap, name)
+	for _, info := range w {
+		result = append(result, workv1alpha2.TargetCluster{
+			Name:     info.ClusterName,
+			Replicas: int32(clusterReplicas[info.ClusterName]),
+		})
+	}
+
+	a.NumReplicas = 0 // 所有副本都已分配
+	a.Result = util.MergeTargetClusters(a.Result, result)
+	klog.Infof("Distribute %s with TakeByWeightWithRandom, result: %v", name, a.Result)
+}
+
+func Distribute(replicas int, weightMap map[string]int, name string) map[string]int {
+	for cluster, replicas := range weightMap {
+		if replicas == 0 {
+			klog.Infof("distribute %s, cluster %s has no weight, remove it from weightMap", name, cluster)
+			delete(weightMap, cluster)
+		}
+	}
+
+	var distribution map[string]int = make(map[string]int)
+	if replicas <= len(weightMap) {
+		distribution, err := DistributeByFlat(distribution, replicas, weightMap, name)
+		if err != nil {
+			klog.Warning("should not use distribute by flat random, err: ", err)
+		} else {
+			return distribution
+		}
+	} else {
+		replicas = replicas - len(weightMap)
+		distribution, _ = DistributeByFlat(distribution, len(weightMap), weightMap, name)
+
+	}
+	distributionByWeight, remain := DistributeByWeight(replicas, weightMap)
+	distribution = MergeMap(distribution, distributionByWeight)
+	if remain == 0 {
+		return distribution
+	}
+	distribution, err := DistributeByFlat(distribution, remain, weightMap, name)
+	if err != nil {
+		klog.Warning("should not use distribute by flat, use random, err: ", err)
+		distribution = DistributeByRandom(distribution, remain, weightMap, name)
+	}
+	return distribution
+}
+
+func MergeMap(map1 map[string]int, map2 map[string]int) map[string]int {
+	for k, v := range map2 {
+		map1[k] += v
+	}
+	return map1
+}
+
+func DistributeByWeight(replicas int, weightMap map[string]int) (map[string]int, int) {
+	totalWeight := 0
+	for _, weight := range weightMap {
+		totalWeight += weight
+	}
+
+	distribution := make(map[string]int)
+	// 1 先按比例分配副本数
+	var remain int = replicas
+	for clu, weight := range weightMap {
+		cluReplicas := int(float64(replicas) * float64(weight) / float64(totalWeight))
+		distribution[clu] = cluReplicas
+		remain = remain - cluReplicas
+	}
+	return distribution, remain
+}
+
+func DistributeByRandom(distribution map[string]int, remain int, weightMap map[string]int, name string) map[string]int {
+	totalWeight := 0
+	for _, weight := range weightMap {
+		totalWeight += weight
+	}
+	klog.Infof("random distribute %s replicas with weight %+v, result:%+v, remain: %d", name, weightMap, distribution, remain)
+	// 初始化随机数种子
+	seedInt := int64(0)
+	for _, char := range name {
+		seedInt += int64(char)
+	}
+	r := mathrand.New(mathrand.NewSource(seedInt))
+	// 将 weightMap 的键提取到一个有序的数组中
+	keys := ClusterArraySortByWeight(weightMap)
+
+	// 根据概率分配副本数
+	for i := 0; i < remain; i++ {
+		randVal := r.Intn(totalWeight)
+		sum := 0
+		for _, key := range keys {
+			sum += weightMap[key]
+			if randVal < sum {
+				distribution[key]++
+				klog.Infof("%s add 1 replicas to %s\n", name, key)
+				break
+			}
+		}
+	}
+	return distribution
+}
+
+func DistributeByFlat(distribution map[string]int, replicas int, weightMap map[string]int, name string) (map[string]int, error) {
+	if replicas > len(weightMap) {
+		return distribution, fmt.Errorf("replicas %d is bigger than cluster list %d", replicas, len(weightMap))
+	}
+	var newDistribution map[string]int = make(map[string]int)
+	for k, v := range distribution {
+		newDistribution[k] = v
+	}
+
+	totalWeight := 0
+	for _, weight := range weightMap {
+		totalWeight += weight
+	}
+	klog.Infof("flat distribute %s replicas with weight %+v, result:%+v, replicas: %d", name, weightMap, distribution, replicas)
+	// 初始化随机数种子
+	seedInt := int64(0)
+	for _, char := range name {
+		seedInt += int64(char)
+	}
+	r := mathrand.New(mathrand.NewSource(seedInt))
+	// 将 weightMap 的键提取到一个有序的数组中
+	keys := ClusterArraySortByWeight(weightMap)
+
+	// 根据概率分配副本数
+	for replicas > 0 {
+		randVal := r.Intn(totalWeight)
+		sum := 0
+		for _, key := range keys {
+			sum += weightMap[key]
+			if randVal < sum && distribution[key] == newDistribution[key] {
+				replicas--
+				distribution[key]++
+				klog.Infof("%s add 1 replicas to %s\n", name, key)
+				break
+			}
+		}
+	}
+	return distribution, nil
+}
+
+func ClusterArraySortByWeight(weightMap map[string]int) []string {
+	type kv struct {
+		Key   string
+		Value int
+	}
+
+	var sorted []kv
+	for k, v := range weightMap {
+		sorted = append(sorted, kv{k, v})
+	}
+
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].Value > sorted[j].Value {
+			return true
+		} else if sorted[i].Value == sorted[j].Value {
+			return sorted[i].Key < sorted[j].Key
+		}
+		return false
+	})
+
+	var sortedKeys []string
+	for _, kv := range sorted {
+		sortedKeys = append(sortedKeys, kv.Key)
+	}
+
+	return sortedKeys
+}
+
 // GetStaticWeightInfoListByTargetClusters constructs a weight list by target cluster slice.
 func GetStaticWeightInfoListByTargetClusters(tcs, scheduled []workv1alpha2.TargetCluster) ClusterWeightInfoList {
 	weightList := make(ClusterWeightInfoList, 0, len(tcs))
@@ -183,6 +374,14 @@ func SpreadReplicasByTargetClusters(numReplicas int32, tcs, init []workv1alpha2.
 	weightList := GetStaticWeightInfoListByTargetClusters(tcs, init)
 	disp := NewDispenser(numReplicas, init)
 	disp.TakeByWeight(weightList)
+	return disp.Result
+}
+
+// SpreadReplicasByTargetClusters divides replicas by the weight of a target cluster list.
+func SpreadReplicasByTargetClustersWithRandom(name string, numReplicas int32, tcs, init []workv1alpha2.TargetCluster) []workv1alpha2.TargetCluster {
+	weightList := GetStaticWeightInfoListByTargetClusters(tcs, init)
+	disp := NewDispenser(numReplicas, init)
+	disp.TakeByWeightWithRandom(name, weightList)
 	return disp.Result
 }
 
