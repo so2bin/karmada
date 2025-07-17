@@ -19,6 +19,7 @@ package helper
 import (
 	"context"
 	"crypto/rand"
+	"fmt"
 	"math/big"
 	mathrand "math/rand"
 	"sort"
@@ -176,17 +177,9 @@ func (a *Dispenser) TakeByWeightWithRandom(name string, w ClusterWeightInfoList)
 	for _, info := range w {
 		weightMap[info.ClusterName] = int(info.Weight)
 	}
-	clusterReplicas := make(map[string]int)
-	var remain int = int(a.NumReplicas)
-	if int(a.NumReplicas) >= len(weightMap) {
-		// 先至少分配每个集群一个副本
-		for clusterName := range weightMap {
-			clusterReplicas[clusterName] = 1
-			remain -= 1
-		}
-	}
-	clusterReplicas = DistributeByRandom(clusterReplicas, remain, weightMap, name)
 
+	var remain int = int(a.NumReplicas)
+	clusterReplicas := Distribute(remain, weightMap, name)
 	for _, info := range w {
 		result = append(result, workv1alpha2.TargetCluster{
 			Name:     info.ClusterName,
@@ -199,21 +192,76 @@ func (a *Dispenser) TakeByWeightWithRandom(name string, w ClusterWeightInfoList)
 	klog.Infof("Distribute %s with TakeByWeightWithRandom, result: %v", name, a.Result)
 }
 
-func DistributeByRandom(distribution map[string]int, remain int, weightMap map[string]int, name string) map[string]int {
+func Distribute(replicas int, weightMap map[string]int, name string) map[string]int {
+	for cluster, replicas := range weightMap {
+		if replicas == 0 {
+			klog.Infof("distribute %s, cluster %s has no weight, remove it from weightMap", name, cluster)
+			delete(weightMap, cluster)
+		}
+	}
+
+	var distribution map[string]int = make(map[string]int)
+	if replicas <= len(weightMap) {
+		distribution, err := DistributeByFlat(distribution, replicas, weightMap, name)
+		if err != nil {
+			klog.Warning("should not use distribute by flat random, err: ", err)
+		} else {
+			return distribution
+		}
+	} else {
+		replicas = replicas - len(weightMap)
+		distribution, _ = DistributeByFlat(distribution, len(weightMap), weightMap, name)
+
+	}
+	distributionByWeight, remain := DistributeByWeight(replicas, weightMap)
+	distribution = MergeMap(distribution, distributionByWeight)
+	if remain == 0 {
+		return distribution
+	}
+	distribution, err := DistributeByFlat(distribution, remain, weightMap, name)
+	if err != nil {
+		klog.Warning("should not use distribute by flat, use random, err: ", err)
+		distribution = DistributeByRandom(distribution, remain, weightMap, name)
+	}
+	return distribution
+}
+
+func MergeMap(map1 map[string]int, map2 map[string]int) map[string]int {
+	for k, v := range map2 {
+		map1[k] += v
+	}
+	return map1
+}
+
+func DistributeByWeight(replicas int, weightMap map[string]int) (map[string]int, int) {
 	totalWeight := 0
 	for _, weight := range weightMap {
 		totalWeight += weight
 	}
 
-	klog.Infof("random distribute %s replicas with weight %+v, result:%+v, remain: %d", name, weightMap, distribution, remain)
+	distribution := make(map[string]int)
+	// 1 先按比例分配副本数
+	var remain int = replicas
+	for clu, weight := range weightMap {
+		cluReplicas := int(float64(replicas) * float64(weight) / float64(totalWeight))
+		distribution[clu] = cluReplicas
+		remain = remain - cluReplicas
+	}
+	return distribution, remain
+}
 
+func DistributeByRandom(distribution map[string]int, remain int, weightMap map[string]int, name string) map[string]int {
+	totalWeight := 0
+	for _, weight := range weightMap {
+		totalWeight += weight
+	}
+	klog.Infof("random distribute %s replicas with weight %+v, result:%+v, remain: %d", name, weightMap, distribution, remain)
 	// 初始化随机数种子
 	seedInt := int64(0)
 	for _, char := range name {
 		seedInt += int64(char)
 	}
 	r := mathrand.New(mathrand.NewSource(seedInt))
-
 	// 将 weightMap 的键提取到一个有序的数组中
 	keys := ClusterArraySortByWeight(weightMap)
 
@@ -225,12 +273,52 @@ func DistributeByRandom(distribution map[string]int, remain int, weightMap map[s
 			sum += weightMap[key]
 			if randVal < sum {
 				distribution[key]++
-				klog.Infof("%s add 1 replicas to %s", name, key)
+				klog.Infof("%s add 1 replicas to %s\n", name, key)
 				break
 			}
 		}
 	}
 	return distribution
+}
+
+func DistributeByFlat(distribution map[string]int, replicas int, weightMap map[string]int, name string) (map[string]int, error) {
+	if replicas > len(weightMap) {
+		return distribution, fmt.Errorf("replicas %d is bigger than cluster list %d", replicas, len(weightMap))
+	}
+	var newDistribution map[string]int = make(map[string]int)
+	for k, v := range distribution {
+		newDistribution[k] = v
+	}
+
+	totalWeight := 0
+	for _, weight := range weightMap {
+		totalWeight += weight
+	}
+	klog.Infof("flat distribute %s replicas with weight %+v, result:%+v, replicas: %d", name, weightMap, distribution, replicas)
+	// 初始化随机数种子
+	seedInt := int64(0)
+	for _, char := range name {
+		seedInt += int64(char)
+	}
+	r := mathrand.New(mathrand.NewSource(seedInt))
+	// 将 weightMap 的键提取到一个有序的数组中
+	keys := ClusterArraySortByWeight(weightMap)
+
+	// 根据概率分配副本数
+	for replicas > 0 {
+		randVal := r.Intn(totalWeight)
+		sum := 0
+		for _, key := range keys {
+			sum += weightMap[key]
+			if randVal < sum && distribution[key] == newDistribution[key] {
+				replicas--
+				distribution[key]++
+				klog.Infof("%s add 1 replicas to %s\n", name, key)
+				break
+			}
+		}
+	}
+	return distribution, nil
 }
 
 func ClusterArraySortByWeight(weightMap map[string]int) []string {

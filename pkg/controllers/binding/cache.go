@@ -60,7 +60,7 @@ func SyncEndpointProgressMapToCache(goCache *gocache.Cache, namespace, name stri
 	goCache.Set(key, progress, defaultRsourceBingdingControllerCacheExpiration)
 	var progressStatus string
 	for cluster, progress := range progress {
-		progressStatus += fmt.Sprintf("cluster %s progress: %+v; ", cluster, *progress)
+		progressStatus += fmt.Sprintf("\ncluster %s progress: %+v; ", cluster, *progress)
 	}
 	klog.Infof("Sync endpoint progress map to go cache for workload %s/%s: %s", namespace, name, progressStatus)
 }
