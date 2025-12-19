@@ -97,8 +97,9 @@ func dynamicDivideReplicas(state *assignState) ([]workv1alpha2.TargetCluster, er
 		// After dispensing, the target cluster will be the combination of init result and weighted result for target replicas.
 		klog.Infof("Distribute %s/%s with DynamicWeightStrategy", state.spec.Resource.Name, state.spec.Resource.Kind)
 		if strings.HasPrefix(state.spec.Resource.Name, binding.ATMSNodeCmPrefix) && state.spec.Resource.Kind == "ConfigMap" {
-			result := helper.SpreadReplicasByTargetClustersWithRandom(state.spec.Resource.Name, state.targetReplicas, state.availableClusters, state.scheduledClusters)
-			klog.Infof("Distribute %s with SpreadReplicasByTargetClustersWithRandom result: %v", state.spec.Resource.Name, result)
+			// 直接返回集群权重，真实的副本数量在interpreter中计算
+			klog.Infof("Distribute %s with availableClusters: %v, state.scheduledClusters: %v", state.spec.Resource.Name, state.availableClusters, state.scheduledClusters)
+			result := state.availableClusters
 			return result, nil
 		}
 		return helper.SpreadReplicasByTargetClusters(state.targetReplicas, state.availableClusters, state.scheduledClusters), nil
