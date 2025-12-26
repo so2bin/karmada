@@ -24,6 +24,7 @@ import (
 
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -141,9 +142,9 @@ func (c *ResourceBindingController) syncBinding(binding *workv1alpha2.ResourceBi
 	start := time.Now()
 
 	if isEnableDelayedScalingNs(workload.GetNamespace()) && isAtmsNodeCmName(workload.GetName()) {
-		err = recordBeginEndpoint(c.GoCache, c.KarmadaSearchCli, c.ResourceInterpreter, workload, binding, apiextensionsv1.NamespaceScoped)
+		err = recordBeginAvailableReplicas(c.GoCache, c.KarmadaSearchCli, c.ResourceInterpreter, workload, binding, apiextensionsv1.NamespaceScoped)
 		if err != nil {
-			klog.Errorf("recordBeginEndpoint error: %v", err)
+			klog.Errorf("recordBeginAvailableReplicas error: %v", err)
 		}
 	}
 	err = ensureWork(c.GoCache, c.CancelableTaskMem, c.Client, c.KarmadaSearchCli, c.ResourceInterpreter, workload, c.OverrideManager, binding, apiextensionsv1.NamespaceScoped)
@@ -337,6 +338,30 @@ func (ss *SKarmadaSearch) GetEndpointsFromKarmadaSearch(nn types.NamespacedName)
 	return endpoints, nil
 }
 
+func (ss *SKarmadaSearch) GetDeploymentsFromKarmadaSearch(nn types.NamespacedName) ([]appsv1.Deployment, error) {
+	raws, err := ss.search(context.TODO(), schema.GroupVersionKind{
+		Group:   "apps",
+		Version: "v1",
+		Kind:    "Deployment",
+	}, nn, &SearchOptions{Unique: true})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get deployments from karmadaSearch for %s/%s, error: %v", nn.Namespace, nn.Name, err)
+	}
+
+	deployments := make([]appsv1.Deployment, 0, len(raws.Items))
+	for _, raw := range raws.Items {
+		var deployment appsv1.Deployment
+		err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Object, &deployment)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert unstructured to Deployment: %v", err)
+		}
+		deployments = append(deployments, deployment)
+	}
+
+	return deployments, nil
+}
+
 type ClusterReplicas struct {
 	ClusterName string
 	Replicas    int
@@ -354,4 +379,14 @@ func GetClusterEndpointMap(endpoints []corev1.Endpoints) (map[string]int, error)
 		}
 	}
 	return clusterEndpoints, nil
+}
+
+func GetClusterAvailableReplicasMap(deployments []appsv1.Deployment) (map[string]int, error) {
+	var clusterAvailableReplicas map[string]int = make(map[string]int)
+	for _, deployment := range deployments {
+		if clusterName, ok := deployment.Annotations["resource.karmada.io/cached-from-cluster"]; ok {
+			clusterAvailableReplicas[clusterName] = int(deployment.Status.AvailableReplicas)
+		}
+	}
+	return clusterAvailableReplicas, nil
 }

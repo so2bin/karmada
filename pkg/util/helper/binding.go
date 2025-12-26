@@ -490,6 +490,30 @@ func ConstructObjectReference(rs policyv1alpha1.ResourceSelector) workv1alpha2.O
 }
 
 // PatchClusterReplicas patch the cluster replica change status for the new target clusters.
+// IsReplicaDistributionUnchanged checks if replica distribution is unchanged between old and new clusters.
+// It compares both cluster names and replica counts (ignoring ReplicaChangeStatus).
+func IsReplicaDistributionUnchanged(oldTargetClusters, newTargetClusters []workv1alpha2.TargetCluster) bool {
+	if len(oldTargetClusters) != len(newTargetClusters) {
+		return false
+	}
+
+	// Build map for comparison
+	oldMap := make(map[string]int32)
+	for _, cluster := range oldTargetClusters {
+		oldMap[cluster.Name] = cluster.Replicas
+	}
+
+	// Check if all new clusters match old ones
+	for _, newCluster := range newTargetClusters {
+		oldReplicas, exists := oldMap[newCluster.Name]
+		if !exists || oldReplicas != newCluster.Replicas {
+			return false
+		}
+	}
+
+	return true
+}
+
 func PatchClusterReplicas(oldTargetClusters, newTargetClusters []workv1alpha2.TargetCluster) {
 	// Calculate total replicas
 	var oldTotal, newTotal int32
@@ -500,10 +524,30 @@ func PatchClusterReplicas(oldTargetClusters, newTargetClusters []workv1alpha2.Ta
 		newTotal += cluster.Replicas
 	}
 
-	// Build old clusters map for quick lookup
+	// Build old clusters map for quick lookup (ignore existing ReplicaChangeStatus)
 	oldClustersMap := make(map[string]int32)
 	for _, cluster := range oldTargetClusters {
 		oldClustersMap[cluster.Name] = cluster.Replicas
+	}
+
+	// Check if replica distribution hasn't changed at all
+	// If all clusters match in both names and replicas, set status to Stable
+	// This indicates that the previous scaling (if any) has completed
+	if len(oldClustersMap) == len(newTargetClusters) {
+		allMatch := true
+		for _, newCluster := range newTargetClusters {
+			if oldReplicas, exists := oldClustersMap[newCluster.Name]; !exists || oldReplicas != newCluster.Replicas {
+				allMatch = false
+				break
+			}
+		}
+		// If replica distribution is identical, mark all as Stable (scaling completed or no change needed)
+		if allMatch && oldTotal == newTotal {
+			for i := range newTargetClusters {
+				newTargetClusters[i].ReplicaChangeStatus = workv1alpha2.ReplicaChangeStatusStable
+			}
+			return
+		}
 	}
 
 	// Compare normalized proportions using cross multiplication to avoid floating point

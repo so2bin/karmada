@@ -49,6 +49,22 @@ func GetEnvDefaultBool(key string, defval bool) bool {
 	return env == "true"
 }
 
+func GetEnvDefaultFloat(key string, defval float64) float64 {
+	env := os.Getenv(key)
+	if env == "" {
+		return defval
+	}
+	val, err := strconv.ParseFloat(env, 64)
+	if err != nil {
+		return defval
+	}
+	// Validate ratio is between 0 and 1
+	if val <= 0 || val > 1 {
+		return defval
+	}
+	return val
+}
+
 var EnvEnableDelayedScalingNamespace string = GetEnvDefaultString("ENABLE_DELAYED_SCALING_NAMESPACE", "tmp-test-dev-3,atms-oversea-test,lwd-test2,ai-app-test,ai-nlp-llm-test")
 
 var EnvEnableDelayedScalingAllTestNamespace bool = GetEnvDefaultBool("ENABLE_DELAYED_SCALING_ALL_TEST_NAMESPACE", false)
@@ -56,3 +72,5 @@ var EnvEnableDelayedScalingAllTestNamespace bool = GetEnvDefaultBool("ENABLE_DEL
 var EnvDelayedScalingTimeoutSecond int = GetEnvDefaultInt("DELAYED_SCALING_TIMEOUT_SECOND", 300)
 
 var EnvDelayedScalingSleepDurationSecond int = GetEnvDefaultInt("DELAYED_SCALING_SLEEP_DURATION_SECOND", 20)
+
+var EnvScaleUpThresholdRatio float64 = GetEnvDefaultFloat("SCALE_UP_THRESHOLD_RATIO", 0.3)
