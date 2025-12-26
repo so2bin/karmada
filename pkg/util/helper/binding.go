@@ -491,21 +491,54 @@ func ConstructObjectReference(rs policyv1alpha1.ResourceSelector) workv1alpha2.O
 
 // PatchClusterReplicas patch the cluster replica change status for the new target clusters.
 func PatchClusterReplicas(oldTargetClusters, newTargetClusters []workv1alpha2.TargetCluster) {
-	for i, newTargetCluster := range newTargetClusters {
-		newTargetClusters[i].ReplicaChangeStatus = workv1alpha2.ReplicaChangeStatusUnknown
-		for _, oldTargetCluster := range oldTargetClusters {
-			if newTargetCluster.Name == oldTargetCluster.Name {
-				if newTargetCluster.Replicas > oldTargetCluster.Replicas {
-					newTargetClusters[i].ReplicaChangeStatus = workv1alpha2.ReplicaChangeStatusScalingUp
-				} else if newTargetCluster.Replicas < oldTargetCluster.Replicas {
-					newTargetClusters[i].ReplicaChangeStatus = workv1alpha2.ReplicaChangeStatusScalingDown
-				} else if newTargetCluster.Replicas == oldTargetCluster.Replicas {
-					newTargetClusters[i].ReplicaChangeStatus = workv1alpha2.ReplicaChangeStatusStable
-				} else {
-					newTargetClusters[i].ReplicaChangeStatus = workv1alpha2.ReplicaChangeStatusUnknown
-				}
-				break
-			}
+	// Calculate total replicas
+	var oldTotal, newTotal int32
+	for _, cluster := range oldTargetClusters {
+		oldTotal += cluster.Replicas
+	}
+	for _, cluster := range newTargetClusters {
+		newTotal += cluster.Replicas
+	}
+
+	// Build old clusters map for quick lookup
+	oldClustersMap := make(map[string]int32)
+	for _, cluster := range oldTargetClusters {
+		oldClustersMap[cluster.Name] = cluster.Replicas
+	}
+
+	// Compare normalized proportions using cross multiplication to avoid floating point
+	// newReplicas/newTotal vs oldReplicas/oldTotal => newReplicas*oldTotal vs oldReplicas*newTotal
+	for i, newCluster := range newTargetClusters {
+		oldReplicas, exists := oldClustersMap[newCluster.Name]
+		if !exists {
+			// New cluster that didn't exist before
+			newTargetClusters[i].ReplicaChangeStatus = workv1alpha2.ReplicaChangeStatusScalingUp
+			continue
+		}
+
+		if oldTotal == 0 || newTotal == 0 {
+			newTargetClusters[i].ReplicaChangeStatus = workv1alpha2.ReplicaChangeStatusUnknown
+			continue
+		}
+
+		// Compare proportions: newCluster.Replicas/newTotal vs oldReplicas/oldTotal
+		// example: Old: {A:30, B:20, C:50} (oldTotal=100)
+		// example: New: {A:30, B:20} (newTotal=50)
+		// example: A 集群：
+		// example: 30 * 100 = 3000 vs 30 * 50 = 1500
+		// example: 3000 > 1500 → ScalingUp ✅
+		// example: B 集群：
+		// example: 20 * 100 = 2000 vs 20 * 50 = 1000
+		// example: 2000 > 1000 → ScalingUp ✅
+		newProportion := newCluster.Replicas * oldTotal
+		oldProportion := oldReplicas * newTotal
+
+		if newProportion > oldProportion {
+			newTargetClusters[i].ReplicaChangeStatus = workv1alpha2.ReplicaChangeStatusScalingUp
+		} else if newProportion < oldProportion {
+			newTargetClusters[i].ReplicaChangeStatus = workv1alpha2.ReplicaChangeStatusScalingDown
+		} else {
+			newTargetClusters[i].ReplicaChangeStatus = workv1alpha2.ReplicaChangeStatusStable
 		}
 	}
 }
