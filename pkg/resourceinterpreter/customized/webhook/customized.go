@@ -146,6 +146,27 @@ func (e *CustomizedInterpreter) IsFixedReplicasToZero(ctx context.Context, attri
 	return response.IsFixedReplicasToZero, matched, nil
 }
 
+// IsAppTopology returns the isAppTopology of the object.
+func (e *CustomizedInterpreter) IsAppTopology(ctx context.Context, attributes *request.Attributes) (isAppTopology bool, matched bool, err error) {
+	klog.V(4).Infof("Get IsAppTopology for object: %v %s/%s with webhook interpreter.",
+		attributes.Object.GroupVersionKind(), attributes.Object.GetNamespace(), attributes.Object.GetName())
+	var response *request.ResponseAttributes
+	response, matched, err = e.interpret(ctx, attributes)
+	if err != nil {
+		klog.Errorf("IsAppTopology for object: %v %s/%s with webhook interpreter failed, err: %v",
+			attributes.Object.GroupVersionKind(), attributes.Object.GetNamespace(), attributes.Object.GetName(), err)
+		return
+	}
+	if !matched {
+		klog.Infof("IsAppTopology for object: %v %s/%s with webhook interpreter, no matched hook",
+			attributes.Object.GroupVersionKind(), attributes.Object.GetNamespace(), attributes.Object.GetName())
+		return
+	}
+	klog.Infof("IsAppTopology for object: %v %s/%s with webhook interpreter, isFixedToZero: %t",
+		attributes.Object.GroupVersionKind(), attributes.Object.GetNamespace(), attributes.Object.GetName(), response.IsFixedReplicasToZero)
+	return response.IsAppTopology, matched, nil
+}
+
 // Patch returns the Unstructured object that applied patch response that based on the RequestAttributes.
 // return matched value to indicate whether there is a matching hook.
 func (e *CustomizedInterpreter) Patch(ctx context.Context, attributes *request.Attributes) (obj *unstructured.Unstructured, matched bool, err error) {

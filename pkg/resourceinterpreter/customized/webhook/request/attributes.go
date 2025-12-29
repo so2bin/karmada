@@ -40,6 +40,7 @@ type ResponseAttributes struct {
 	Replicas              int32
 	MinReplicas           int32
 	IsFixedReplicasToZero bool
+	IsAppTopology         bool
 	ReplicaRequirements   *workv1alpha2.ReplicaRequirements
 	Dependencies          []configv1alpha1.DependentObjectReference
 	Patch                 []byte

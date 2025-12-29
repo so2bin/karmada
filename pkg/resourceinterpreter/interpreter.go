@@ -52,6 +52,9 @@ type ResourceInterpreter interface {
 	// IsFixedReplicasToZero returns the isFixedToZero of the object.
 	IsFixedReplicasToZero(object *unstructured.Unstructured) (isFixedToZero bool, err error)
 
+	// IsAppTopology returns the isAppTopology of the object.
+	IsAppTopology(object *unstructured.Unstructured) (isAppTopology bool, err error)
+
 	// ReviseReplica revises the replica of the given object.
 	ReviseReplica(object *unstructured.Unstructured, replica int64) (*unstructured.Unstructured, error)
 
@@ -169,6 +172,18 @@ func (i *customResourceInterpreterImpl) GetMinReplicas(object *unstructured.Unst
 // IsFixedReplicasToZero returns the isFixedToZero of the object.
 func (i *customResourceInterpreterImpl) IsFixedReplicasToZero(object *unstructured.Unstructured) (isFixedToZero bool, err error) {
 	isFixedToZero, _, err = i.customizedInterpreter.IsFixedReplicasToZero(context.TODO(), &request.Attributes{
+		Operation: configv1alpha1.InterpreterOperationInterpretReplica,
+		Object:    object,
+	})
+	if err != nil {
+		return
+	}
+	return
+}
+
+// IsFixedReplicasToZero returns the isFixedToZero of the object.
+func (i *customResourceInterpreterImpl) IsAppTopology(object *unstructured.Unstructured) (isAppTopology bool, err error) {
+	isAppTopology, _, err = i.customizedInterpreter.IsAppTopology(context.TODO(), &request.Attributes{
 		Operation: configv1alpha1.InterpreterOperationInterpretReplica,
 		Object:    object,
 	})

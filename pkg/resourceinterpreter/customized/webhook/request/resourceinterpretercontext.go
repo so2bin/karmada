@@ -118,6 +118,9 @@ func verifyResourceInterpreterContext(operation configv1alpha1.InterpreterOperat
 		if response.IsFixedReplicasToZero != nil {
 			res.IsFixedReplicasToZero = *response.IsFixedReplicasToZero
 		}
+		if response.IsAppTopology != nil {
+			res.IsAppTopology = *response.IsAppTopology
+		}
 		res.ReplicaRequirements = response.ReplicaRequirements
 		return res, nil
 	case configv1alpha1.InterpreterOperationInterpretDependency:
