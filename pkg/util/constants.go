@@ -88,6 +88,10 @@ const (
 	// The placement could be either PropagationPolicy's or ClusterPropagationPolicy's.
 	PolicyPlacementAnnotation = "policy.karmada.io/applied-placement"
 
+	// LastScheduleTimeAnnotation is the annotation to record the last scheduling timestamp.
+	// It is used to prevent repeated scheduling within a short time window (debouncing).
+	LastScheduleTimeAnnotation = "scheduler.karmada.io/last-schedule-time"
+
 	// AppliedOverrides is the annotation which used to record override items an object applied.
 	// It is intended to set on Work objects to record applied overrides.
 	// The overrides items should be sorted alphabetically in ascending order by OverridePolicy's name.

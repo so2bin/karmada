@@ -15,14 +15,15 @@ import (
 const defaultRsourceBingdingControllerCacheExpiration time.Duration = time.Duration(30 * time.Minute)
 
 type ExpansionProgress struct {
-	Namespace            string    `json:"namespace"`            // namespace
-	Name                 string    `json:"name"`                 // name
-	Progress             int       `json:"progress"`             // progress：0-100
-	CurrentEndpoints     int       `json:"currentEndpoints"`     // current endpoints length
-	BeginEndpoints       int       `json:"beginEndpoints"`       // begin endpoints length
-	FinalMinReplicas     int       `json:"finalMinReplicas"`     // final min replicas
-	ReplicasChangeStatus string    `json:"replicasChangeStatus"` // replicas change status
-	LastUpdate           time.Time `json:"lastUpdate"`           // last update time
+	Namespace                string    `json:"namespace"`                // namespace
+	Name                     string    `json:"name"`                     // name
+	Progress                 int       `json:"progress"`                 // progress：0-100
+	CurrentAvailableReplicas int       `json:"currentAvailableReplicas"` // current available replicas
+	BeginAvailableReplicas   int       `json:"beginAvailableReplicas"`   // begin available replicas
+	TargetReplicas           int       `json:"targetReplicas"`           // target replicas for this cluster
+	FinalMinReplicas         int       `json:"finalMinReplicas"`         // final min replicas
+	ReplicasChangeStatus     string    `json:"replicasChangeStatus"`     // replicas change status
+	LastUpdate               time.Time `json:"lastUpdate"`               // last update time
 }
 
 const ATMSNodeCmPrefix string = "atms-node-conf-"
@@ -54,33 +55,33 @@ func GetTargetClusterFromCache(goCache *gocache.Cache, namespace, name string) (
 	return targetClusters, nil
 }
 
-func SyncEndpointProgressMapToCache(goCache *gocache.Cache, namespace, name string, progress map[string]*ExpansionProgress) {
+func SyncReplicasProgressMapToCache(goCache *gocache.Cache, namespace, name string, progress map[string]*ExpansionProgress) {
 	name = GetEndpointName(name)
-	key := fmt.Sprintf("endpoints-progress-%s-%s", namespace, name)
+	key := fmt.Sprintf("replicas-progress-%s-%s", namespace, name)
 	goCache.Set(key, progress, defaultRsourceBingdingControllerCacheExpiration)
 	var progressStatus string
 	for cluster, progress := range progress {
 		progressStatus += fmt.Sprintf("\ncluster %s progress: %+v; ", cluster, *progress)
 	}
-	klog.Infof("Sync endpoint progress map to go cache for workload %s/%s: %s", namespace, name, progressStatus)
+	klog.Infof("Sync replicas progress map to go cache for workload %s/%s: %s", namespace, name, progressStatus)
 }
 
-func GetEndpointProgressFromCache(goCache *gocache.Cache, namespace, name string) (map[string]*ExpansionProgress, error) {
+func GetReplicasProgressFromCache(goCache *gocache.Cache, namespace, name string) (map[string]*ExpansionProgress, error) {
 	name = GetEndpointName(name)
-	key := fmt.Sprintf("endpoints-progress-%s-%s", namespace, name)
+	key := fmt.Sprintf("replicas-progress-%s-%s", namespace, name)
 	it, found := goCache.Get(key)
 	if !found {
-		return nil, fmt.Errorf("endpoint %s not found", key)
+		return nil, fmt.Errorf("replicas progress %s not found", key)
 	}
 	progress, ok := it.(map[string]*ExpansionProgress)
 	if !ok {
-		return nil, fmt.Errorf("endpoint %s is not map[string]*ExpansionProgress", key)
+		return nil, fmt.Errorf("replicas progress %s is not map[string]*ExpansionProgress", key)
 	}
 	var progressStatus string
-	for cluster, clusterEndpointsMaprogress := range progress {
-		progressStatus += fmt.Sprintf("cluster %s progress: %+v; ", cluster, *clusterEndpointsMaprogress)
+	for cluster, clusterReplicasProgress := range progress {
+		progressStatus += fmt.Sprintf("cluster %s progress: %+v; ", cluster, *clusterReplicasProgress)
 	}
-	klog.Infof("Get endpoint progress from go cache for workload %s/%s: %s", namespace, name, progressStatus)
+	klog.Infof("Get replicas progress from go cache for workload %s/%s: %s", namespace, name, progressStatus)
 	return progress, nil
 }
 
@@ -89,48 +90,58 @@ func IsOtherReachScaleUpThreshold(goCache *gocache.Cache, karmadaSearchCli *SKar
 	scalingUpClusters := []string{}
 
 	name = GetEndpointName(name)
-	progressMap, err := GetEndpointProgressFromCache(goCache, namespace, name)
+	progressMap, err := GetReplicasProgressFromCache(goCache, namespace, name)
 	if err != nil {
-		return false, fmt.Errorf("failed to get target cluster from cache: %w", err)
+		return false, fmt.Errorf("failed to get replicas progress from cache: %w", err)
 	}
 
 	startTime := time.Now()
-	latestEndpoints, err := karmadaSearchCli.GetEndpointsFromKarmadaSearch(types.NamespacedName{Namespace: namespace, Name: name})
+	latestDeployments, err := karmadaSearchCli.GetDeploymentsFromKarmadaSearch(types.NamespacedName{Namespace: namespace, Name: name})
 	if err != nil {
-		return false, fmt.Errorf("failed to get endpoints from karmadaSearch: %w", err)
+		return false, fmt.Errorf("failed to get deployments from karmadaSearch: %w", err)
 	}
-	latestClusterEndpointsMap, err := GetClusterEndpointMap(latestEndpoints)
+	latestClusterAvailableReplicasMap, err := GetClusterAvailableReplicasMap(latestDeployments)
 	if err != nil {
-		return false, fmt.Errorf("failed to get cluster endpoint: %w", err)
+		return false, fmt.Errorf("failed to get cluster available replicas: %w", err)
 	}
-	klog.Infof("Success get endpoints from karmadaSearch for %s/%s took %v, latestClusterEndpointsMap: %+v", namespace, name, time.Since(startTime), latestClusterEndpointsMap)
+	klog.Infof("Success get deployments from karmadaSearch for %s/%s took %v, latestClusterAvailableReplicasMap: %+v", namespace, name, time.Since(startTime), latestClusterAvailableReplicasMap)
 
 	for cluster, progress := range progressMap {
 		if cluster == currCluster {
-			// if current endpoints is 0, return true
-			if progress.CurrentEndpoints == 0 || progress.BeginEndpoints == 0 {
-				klog.Infof("%s/%s/%s current endpoints is 0, return true, progress: %+v", cluster, namespace, name, *progress)
+			// if current available replicas is 0, return true
+			if progress.CurrentAvailableReplicas == 0 || progress.BeginAvailableReplicas == 0 {
+				klog.Infof("%s/%s/%s current available replicas is 0, return true, progress: %+v", cluster, namespace, name, *progress)
 				return true, nil
 			}
 			continue
 		}
-		endpointsCount, ok := latestClusterEndpointsMap[cluster]
+		availableReplicas, ok := latestClusterAvailableReplicasMap[cluster]
 		if !ok {
 			continue
 		}
-		progress.CurrentEndpoints = endpointsCount
+		progress.CurrentAvailableReplicas = availableReplicas
 		if progress.ReplicasChangeStatus == workv1alpha2.ReplicaChangeStatusScalingUp {
 			scalingUpClusters = append(scalingUpClusters, cluster)
 			isHasScalingUpCluster = true
-			if progress.CurrentEndpoints >= int(math.Ceil(float64(progress.FinalMinReplicas)*0.25)) {
-				klog.Infof("%s/%s/%s is scaling up, current endpoints: %d, final min replicas: %d, ensure work retry gortinue will reached scale up threshold",
-					currCluster, namespace, name, progress.CurrentEndpoints, progress.FinalMinReplicas)
+			// Check if available replicas reached threshold ratio of target replicas (not final min replicas)
+			// This ensures we wait for actual scale up completion, not just minimum threshold
+			// Condition 1: Threshold ratio can be configured via SCALE_UP_THRESHOLD_RATIO env var (default: 0.5)
+			// Condition 2: Current replicas >= BeginAvailableReplicas + 1
+			// Either condition can trigger the threshold
+			threshold := int(math.Ceil(float64(progress.TargetReplicas) * EnvScaleUpThresholdRatio))
+			incrementThreshold := progress.BeginAvailableReplicas + 1
+			if progress.CurrentAvailableReplicas >= threshold || progress.CurrentAvailableReplicas >= incrementThreshold {
+				klog.Infof("%s/%s/%s is scaling up, current available replicas: %d, target replicas: %d, threshold (%.0f%%): %d, increment threshold (begin+1): %d, ensure work retry goroutine will reached scale up threshold",
+					currCluster, namespace, name, progress.CurrentAvailableReplicas, progress.TargetReplicas, EnvScaleUpThresholdRatio*100, threshold, incrementThreshold)
 				return true, nil
+			} else {
+				klog.Infof("%s/%s/%s is scaling up but not reached threshold yet, current: %d, target: %d, threshold (%.0f%%): %d, increment threshold (begin+1): %d",
+					cluster, namespace, name, progress.CurrentAvailableReplicas, progress.TargetReplicas, EnvScaleUpThresholdRatio*100, threshold, incrementThreshold)
 			}
 		}
 		progressMap[cluster] = progress
 	}
-	SyncEndpointProgressMapToCache(goCache, namespace, name, progressMap)
+	SyncReplicasProgressMapToCache(goCache, namespace, name, progressMap)
 	if !isHasScalingUpCluster {
 		klog.Infof("%s/%s/%s no other cluster is scaling up, return true", currCluster, namespace, name)
 		for cluster, progress := range progressMap {

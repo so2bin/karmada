@@ -538,7 +538,7 @@ func getMinReplicas(resourceInterpreter resourceinterpreter.ResourceInterpreter,
 	return 0, err
 }
 
-func recordBeginEndpoint(gocache *gocache.Cache, karmadaSearchCli *SKarmadaSearch, resourceInterpreter resourceinterpreter.ResourceInterpreter, workload *unstructured.Unstructured,
+func recordBeginAvailableReplicas(gocache *gocache.Cache, karmadaSearchCli *SKarmadaSearch, resourceInterpreter resourceinterpreter.ResourceInterpreter, workload *unstructured.Unstructured,
 	binding metav1.Object, scope apiextensionsv1.ResourceScope) error {
 
 	var targetClusters []workv1alpha2.TargetCluster
@@ -557,16 +557,16 @@ func recordBeginEndpoint(gocache *gocache.Cache, karmadaSearchCli *SKarmadaSearc
 	startTime := time.Now()
 	ns := workload.GetNamespace()
 	name := GetEndpointName(workload.GetName())
-	endpoints, err := karmadaSearchCli.GetEndpointsFromKarmadaSearch(types.NamespacedName{Namespace: ns, Name: name})
+	deployments, err := karmadaSearchCli.GetDeploymentsFromKarmadaSearch(types.NamespacedName{Namespace: ns, Name: name})
 	if err != nil {
-		klog.Errorf("Failed to get endpoints from karmada search: %v", err)
+		klog.Errorf("Failed to get deployments from karmada search: %v", err)
 	}
-	clusterEndpointsMap, err := GetClusterEndpointMap(endpoints)
+	clusterAvailableReplicasMap, err := GetClusterAvailableReplicasMap(deployments)
 	if err != nil {
-		klog.Errorf("Failed to get endpoints from karmadaSearch for %s/%s, error: %v", ns, name, err)
+		klog.Errorf("Failed to get available replicas from karmadaSearch for %s/%s, error: %v", ns, name, err)
 	}
-	klog.Infof("Success get endpoints from karmadaSearch for %s/%s took %v, clusterEndpointsMap: %v", ns, name,
-		time.Since(startTime), clusterEndpointsMap)
+	klog.Infof("Success get deployments from karmadaSearch for %s/%s took %v, clusterAvailableReplicasMap: %v", ns, name,
+		time.Since(startTime), clusterAvailableReplicasMap)
 
 	targetClusters = mergeTargetClusters(targetClusters, requiredByBindingSnapshot)
 
@@ -583,37 +583,39 @@ func recordBeginEndpoint(gocache *gocache.Cache, karmadaSearchCli *SKarmadaSearc
 		return err
 	}
 
-	endpointProgressMap := make(map[string]*ExpansionProgress)
+	replicasProgressMap := make(map[string]*ExpansionProgress)
 
 	for i := range targetClusters {
 		targetCluster := targetClusters[i]
 		clusterName := targetCluster.Name
-		currentEndpoints := clusterEndpointsMap[clusterName]
+		currentAvailableReplicas := clusterAvailableReplicasMap[clusterName]
 
-		endpointName := GetEndpointName(workload.GetName())
+		deploymentName := GetEndpointName(workload.GetName())
 		progress := &ExpansionProgress{
-			Namespace:            workload.GetNamespace(),
-			Name:                 endpointName,
-			CurrentEndpoints:     currentEndpoints,
-			BeginEndpoints:       currentEndpoints,
-			ReplicasChangeStatus: targetCluster.ReplicaChangeStatus,
-			LastUpdate:           time.Now(),
+			Namespace:                workload.GetNamespace(),
+			Name:                     deploymentName,
+			CurrentAvailableReplicas: currentAvailableReplicas,
+			BeginAvailableReplicas:   currentAvailableReplicas,
+			TargetReplicas:           int(targetCluster.Replicas),
+			ReplicasChangeStatus:     targetCluster.ReplicaChangeStatus,
+			LastUpdate:               time.Now(),
 		}
 		if replicasSum > 0 {
 			finalMinReplicas := minReplicas * int(targetCluster.Replicas) / replicasSum
 			progress.FinalMinReplicas = finalMinReplicas
 
-			klog.Infof("%s/%s cluster %s progress.FinMinReplicas: (%d * %d) / %d= %d", workload.GetNamespace(), workload.GetName(), clusterName,
-				minReplicas, targetCluster.Replicas, replicasSum, progress.FinalMinReplicas)
+			klog.Infof("%s/%s cluster %s progress: TargetReplicas=%d, FinMinReplicas=(%d * %d) / %d= %d, ReplicaChangeStatus=%s",
+				workload.GetNamespace(), workload.GetName(), clusterName,
+				progress.TargetReplicas, minReplicas, targetCluster.Replicas, replicasSum, progress.FinalMinReplicas, targetCluster.ReplicaChangeStatus)
 		}
-		endpointProgressMap[clusterName] = progress
+		replicasProgressMap[clusterName] = progress
 	}
 
 	var progressStatus string
-	for cluster, progress := range endpointProgressMap {
+	for cluster, progress := range replicasProgressMap {
 		progressStatus += fmt.Sprintf("cluster %s progress: %+v; ", cluster, *progress)
 	}
-	klog.Infof("Sync begin endpoint progress map to go cache for %s/%s: %s", workload.GetNamespace(), workload.GetName(), progressStatus)
-	SyncEndpointProgressMapToCache(gocache, workload.GetNamespace(), workload.GetName(), endpointProgressMap)
+	klog.Infof("Sync begin replicas progress map to go cache for %s/%s: %s", workload.GetNamespace(), workload.GetName(), progressStatus)
+	SyncReplicasProgressMapToCache(gocache, workload.GetNamespace(), workload.GetName(), replicasProgressMap)
 	return nil
 }
