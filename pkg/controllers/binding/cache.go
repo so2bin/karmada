@@ -125,15 +125,18 @@ func IsOtherReachScaleUpThreshold(goCache *gocache.Cache, karmadaSearchCli *SKar
 			isHasScalingUpCluster = true
 			// Check if available replicas reached threshold ratio of target replicas (not final min replicas)
 			// This ensures we wait for actual scale up completion, not just minimum threshold
-			// Threshold ratio can be configured via SCALE_UP_THRESHOLD_RATIO env var (default: 0.3)
+			// Condition 1: Threshold ratio can be configured via SCALE_UP_THRESHOLD_RATIO env var (default: 0.5)
+			// Condition 2: Current replicas >= BeginAvailableReplicas + 1
+			// Either condition can trigger the threshold
 			threshold := int(math.Ceil(float64(progress.TargetReplicas) * EnvScaleUpThresholdRatio))
-			if progress.CurrentAvailableReplicas >= threshold {
-				klog.Infof("%s/%s/%s is scaling up, current available replicas: %d, target replicas: %d, threshold (%.0f%%): %d, ensure work retry goroutine will reached scale up threshold",
-					currCluster, namespace, name, progress.CurrentAvailableReplicas, progress.TargetReplicas, EnvScaleUpThresholdRatio*100, threshold)
+			incrementThreshold := progress.BeginAvailableReplicas + 1
+			if progress.CurrentAvailableReplicas >= threshold || progress.CurrentAvailableReplicas >= incrementThreshold {
+				klog.Infof("%s/%s/%s is scaling up, current available replicas: %d, target replicas: %d, threshold (%.0f%%): %d, increment threshold (begin+1): %d, ensure work retry goroutine will reached scale up threshold",
+					currCluster, namespace, name, progress.CurrentAvailableReplicas, progress.TargetReplicas, EnvScaleUpThresholdRatio*100, threshold, incrementThreshold)
 				return true, nil
 			} else {
-				klog.Infof("%s/%s/%s is scaling up but not reached threshold yet, current: %d, target: %d, threshold (%.0f%%): %d",
-					cluster, namespace, name, progress.CurrentAvailableReplicas, progress.TargetReplicas, EnvScaleUpThresholdRatio*100, threshold)
+				klog.Infof("%s/%s/%s is scaling up but not reached threshold yet, current: %d, target: %d, threshold (%.0f%%): %d, increment threshold (begin+1): %d",
+					cluster, namespace, name, progress.CurrentAvailableReplicas, progress.TargetReplicas, EnvScaleUpThresholdRatio*100, threshold, incrementThreshold)
 			}
 		}
 		progressMap[cluster] = progress

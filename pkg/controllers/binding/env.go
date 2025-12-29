@@ -73,4 +73,4 @@ var EnvDelayedScalingTimeoutSecond int = GetEnvDefaultInt("DELAYED_SCALING_TIMEO
 
 var EnvDelayedScalingSleepDurationSecond int = GetEnvDefaultInt("DELAYED_SCALING_SLEEP_DURATION_SECOND", 20)
 
-var EnvScaleUpThresholdRatio float64 = GetEnvDefaultFloat("SCALE_UP_THRESHOLD_RATIO", 0.3)
+var EnvScaleUpThresholdRatio float64 = GetEnvDefaultFloat("SCALE_UP_THRESHOLD_RATIO", 0.5)
