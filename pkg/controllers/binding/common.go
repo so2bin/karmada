@@ -29,7 +29,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	k8syaml "sigs.k8s.io/yaml"
 
 	configv1alpha1 "github.com/karmada-io/karmada/pkg/apis/config/v1alpha1"
 	policyv1alpha1 "github.com/karmada-io/karmada/pkg/apis/policy/v1alpha1"
@@ -40,6 +39,8 @@ import (
 	"github.com/karmada-io/karmada/pkg/util/names"
 	"github.com/karmada-io/karmada/pkg/util/overridemanager"
 	gocache "github.com/patrickmn/go-cache"
+
+	k8syaml "sigs.k8s.io/yaml"
 )
 
 // ensureWork ensure Work to be created or updated.
@@ -476,66 +477,76 @@ func isFixedReplicasToZeroFromResourceInterpreter(resourceInterpreter resourcein
 	return isFixedToZero
 }
 
-func getMinReplicasFromResourceTemplate(workload *unstructured.Unstructured) (int32, error) {
+func getMinReplicas(resourceInterpreter resourceinterpreter.ResourceInterpreter, workload *unstructured.Unstructured) (int, error) {
+	minReplicas, err := getMinReplicasFromResourceInterpreter(resourceInterpreter, workload)
+	if err != nil {
+		klog.Errorf("Failed to get minReplicas for workload %s/%s, error: %v", workload.GetNamespace(), workload.GetName(), err)
+		return 0, err
+	}
+	return int(minReplicas), nil
+}
+
+func getMaxReplicas(resourceInterpreter resourceinterpreter.ResourceInterpreter, workload *unstructured.Unstructured) (int, error) {
+	maxReplicas, _, err := resourceInterpreter.GetReplicas(workload)
+	if err != nil {
+		klog.Errorf("Failed to get minReplicas for workload %s/%s, error: %v", workload.GetNamespace(), workload.GetName(), err)
+		return 0, err
+	}
+	return int(maxReplicas), nil
+
+}
+
+func getMinMaxReplicasFromResourceTemplate(workload *unstructured.Unstructured) (int, int, error) {
 	klog.Infof("Processing workload for %s/%s: %+v", workload.GetNamespace(), workload.GetName(), workload)
 
 	workloadObj := workload.Object
 	if workloadObj == nil {
 		klog.Infof("Workload object is nil for %s/%s", workload.GetNamespace(), workload.GetName())
-		return 0, nil
+		return 0, 0, nil
 	}
 
 	nodeCmData, exists := workloadObj["data"]
 	if !exists || nodeCmData == nil {
 		klog.Infof("No data field found in workload object for %s/%s", workload.GetNamespace(), workload.GetName())
-		return 0, nil
+		return 0, 0, nil
 	}
 
 	nodeCmDataMap, ok := nodeCmData.(map[string]interface{})
 	if !ok {
-		return 0, fmt.Errorf("node-cm data is not map[string]interface{} type, actual type: %T, value: %v", nodeCmData, nodeCmData)
+		return 0, 0, fmt.Errorf("node-cm data is not map[string]interface{} type, actual type: %T, value: %v", nodeCmData, nodeCmData)
 	}
 
 	appYaml, exists := nodeCmDataMap["app-yaml"]
 	if !exists || appYaml == nil {
 		klog.Infof("No app-yaml field found in node-cm data for %s/%s", workload.GetNamespace(), workload.GetName())
-		return 0, nil
+		return 0, 0, nil
 	}
 
 	appYamlStr, ok := appYaml.(string)
 	if !ok {
-		return 0, fmt.Errorf("app-yaml is not string type, actual type: %T, value: %v", appYaml, appYaml)
+		return 0, 0, fmt.Errorf("app-yaml is not string type, actual type: %T, value: %v", appYaml, appYaml)
 	}
 
 	appNodeCmData := &KAppNodeCmData{}
 	if err := k8syaml.Unmarshal([]byte(appYamlStr), appNodeCmData); err != nil {
-		return 0, fmt.Errorf("failed to unmarshal node-cm configmap: %v", err)
+		return 0, 0, fmt.Errorf("failed to unmarshal node-cm configmap: %v", err)
 	}
 
 	if appNodeCmData.Scale != nil {
 		klog.Infof("Scale configuration found for %s/%s: %+v", workload.GetNamespace(), workload.GetName(), appNodeCmData.Scale)
-		return int32(appNodeCmData.Scale.MinReplicas), nil
+		return appNodeCmData.Scale.MinReplicas, appNodeCmData.Scale.MaxReplicas, nil
 	}
 
-	return 0, nil
+	return 0, 0, nil
 }
 
-func getMinReplicas(resourceInterpreter resourceinterpreter.ResourceInterpreter, workload *unstructured.Unstructured) (int, error) {
-	// 从resource interpreter中获取minReplicas
-	minReplicas, err := getMinReplicasFromResourceInterpreter(resourceInterpreter, workload)
-	if err == nil && minReplicas != 0 {
-		klog.Infof("Get minReplicas from resource interpreter for workload %s/%s: %d", workload.GetNamespace(), workload.GetName(), minReplicas)
-		return int(minReplicas), nil
+func getIsAppTopology(resourceInterpreter resourceinterpreter.ResourceInterpreter, workload *unstructured.Unstructured) (bool, error) {
+	isAppTopology, err := resourceInterpreter.IsAppTopology(workload)
+	if err != nil {
+		klog.Errorf("Failed to get isAppTopology for workload %s/%s, error: %v", workload.GetNamespace(), workload.GetName(), err)
+		return false, err
 	}
-	// 从resource template中获取minReplicas
-	minReplicas, err = getMinReplicasFromResourceTemplate(workload)
-	if err == nil {
-		klog.Infof("Get minReplicas from resource template for workload %s/%s: %d", workload.GetNamespace(), workload.GetName(), minReplicas)
-		return int(minReplicas), nil
-	}
-
-	klog.Errorf("Failed to get minReplicas for workload %s/%s, error: %v", workload.GetNamespace(), workload.GetName(), err)
-	return 0, err
+	return isAppTopology, nil
 }
 
 func recordBeginAvailableReplicas(gocache *gocache.Cache, karmadaSearchCli *SKarmadaSearch, resourceInterpreter resourceinterpreter.ResourceInterpreter, workload *unstructured.Unstructured,
@@ -556,7 +567,9 @@ func recordBeginAvailableReplicas(gocache *gocache.Cache, karmadaSearchCli *SKar
 
 	startTime := time.Now()
 	ns := workload.GetNamespace()
-	name := GetEndpointName(workload.GetName())
+	name := GetDeploymentName(workload.GetName())
+	clusterWeightMap := make(map[string]int)
+
 	deployments, err := karmadaSearchCli.GetDeploymentsFromKarmadaSearch(types.NamespacedName{Namespace: ns, Name: name})
 	if err != nil {
 		klog.Errorf("Failed to get deployments from karmada search: %v", err)
@@ -572,42 +585,51 @@ func recordBeginAvailableReplicas(gocache *gocache.Cache, karmadaSearchCli *SKar
 
 	SyncTargetClusterToCache(gocache, workload.GetNamespace(), workload.GetName(), targetClusters)
 
-	replicasSum := 0
+	clusterWeightSum := 0
 	for i := range targetClusters {
 		targetCluster := targetClusters[i]
-		replicasSum += int(targetCluster.Replicas)
-	}
-	minReplicas, err := getMinReplicas(resourceInterpreter, workload)
-	if err != nil {
-		klog.Errorf("Failed to get minReplicas for workload %s/%s, error: %v", workload.GetNamespace(), workload.GetName(), err)
-		return err
+		clusterWeightSum += int(targetCluster.Replicas)
+		clusterWeightMap[targetCluster.Name] = int(targetCluster.Replicas)
 	}
 
 	replicasProgressMap := make(map[string]*ExpansionProgress)
 
 	for i := range targetClusters {
+
 		targetCluster := targetClusters[i]
 		clusterName := targetCluster.Name
 		currentAvailableReplicas := clusterAvailableReplicasMap[clusterName]
 
-		deploymentName := GetEndpointName(workload.GetName())
+		clonedWorkload := workload.DeepCopy()
+		util.MergeAnnotation(clonedWorkload, util.ClusterNameAnnotation, targetCluster.Name)
+		clonedWorkload, err = resourceInterpreter.ReviseReplica(clonedWorkload, int64(targetCluster.Replicas))
+		if err != nil {
+			klog.Errorf("Failed to revise replica for %s/%s/%s in cluster %s, err is: %v",
+				workload.GetKind(), workload.GetNamespace(), workload.GetName(), targetCluster.Name, err)
+			return err
+		}
+
+		finalMinReplicas, finalMaxReplicas, err := getMinMaxReplicasFromResourceTemplate(clonedWorkload)
+		if err != nil {
+			klog.Errorf("Failed to get minMaxReplicas for workload %s/%s, error: %v", workload.GetNamespace(), workload.GetName(), err)
+			return err
+		}
+		deploymentName := GetDeploymentName(workload.GetName())
 		progress := &ExpansionProgress{
+			ClusterName:              clusterName,
 			Namespace:                workload.GetNamespace(),
 			Name:                     deploymentName,
 			CurrentAvailableReplicas: currentAvailableReplicas,
 			BeginAvailableReplicas:   currentAvailableReplicas,
-			TargetReplicas:           int(targetCluster.Replicas),
+			FinalMinReplicas:         finalMinReplicas,
 			ReplicasChangeStatus:     targetCluster.ReplicaChangeStatus,
 			LastUpdate:               time.Now(),
 		}
-		if replicasSum > 0 {
-			finalMinReplicas := minReplicas * int(targetCluster.Replicas) / replicasSum
-			progress.FinalMinReplicas = finalMinReplicas
 
-			klog.Infof("%s/%s cluster %s progress: TargetReplicas=%d, FinMinReplicas=(%d * %d) / %d= %d, ReplicaChangeStatus=%s",
-				workload.GetNamespace(), workload.GetName(), clusterName,
-				progress.TargetReplicas, minReplicas, targetCluster.Replicas, replicasSum, progress.FinalMinReplicas, targetCluster.ReplicaChangeStatus)
-		}
+		klog.Infof("record begin available replicas for ensure work,  %s/%s/%s progress: BeginAvailableReplicas=%d, FinalMinReplicas=%d, FinalMaxReplicas=%d, ReplicaChangeStatus=%s",
+			clusterName, workload.GetNamespace(), workload.GetName(),
+			currentAvailableReplicas, finalMinReplicas, finalMaxReplicas, targetCluster.ReplicaChangeStatus)
+
 		replicasProgressMap[clusterName] = progress
 	}
 
