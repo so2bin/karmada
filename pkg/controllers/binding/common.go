@@ -540,15 +540,6 @@ func getMinMaxReplicasFromResourceTemplate(workload *unstructured.Unstructured) 
 	return 0, 0, nil
 }
 
-func getIsAppTopology(resourceInterpreter resourceinterpreter.ResourceInterpreter, workload *unstructured.Unstructured) (bool, error) {
-	isAppTopology, err := resourceInterpreter.IsAppTopology(workload)
-	if err != nil {
-		klog.Errorf("Failed to get isAppTopology for workload %s/%s, error: %v", workload.GetNamespace(), workload.GetName(), err)
-		return false, err
-	}
-	return isAppTopology, nil
-}
-
 func recordBeginAvailableReplicas(gocache *gocache.Cache, karmadaSearchCli *SKarmadaSearch, resourceInterpreter resourceinterpreter.ResourceInterpreter, workload *unstructured.Unstructured,
 	binding metav1.Object, scope apiextensionsv1.ResourceScope) error {
 

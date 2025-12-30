@@ -128,10 +128,6 @@ type ResourceInterpreterResponse struct {
 	// +optional
 	IsFixedReplicasToZero *bool `json:"isFixedReplicasToZero,omitempty"`
 
-	// IsAppTopology represents whether the workload belongs to an application topology group.
-	// +optional
-	IsAppTopology *bool `json:"isAppTopology,omitempty"`
-
 	// Dependencies represents the reference of dependencies object.
 	// Required if InterpreterOperation is InterpreterOperationInterpretDependency.
 	// +optional
