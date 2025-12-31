@@ -42,6 +42,7 @@ import (
 	clusterv1alpha1 "github.com/karmada-io/karmada/pkg/apis/cluster/v1alpha1"
 	policyv1alpha1 "github.com/karmada-io/karmada/pkg/apis/policy/v1alpha1"
 	workv1alpha2 "github.com/karmada-io/karmada/pkg/apis/work/v1alpha2"
+	"github.com/karmada-io/karmada/pkg/controllers/binding"
 	estimatorclient "github.com/karmada-io/karmada/pkg/estimator/client"
 	"github.com/karmada-io/karmada/pkg/events"
 	karmadaclientset "github.com/karmada-io/karmada/pkg/generated/clientset/versioned"
@@ -589,9 +590,10 @@ func (s *Scheduler) patchScheduleResultForResourceBinding(oldBinding *workv1alph
 		newBinding.Annotations[util.PolicyPlacementAnnotation] = placement
 	}
 
-	// Check if within debounce time window (1 second) and replica distribution unchanged
+	// Check if within debounce time window and replica distribution unchanged
 	// IMPORTANT: Check this BEFORE calling PatchClusterReplicas to prevent state modification
-	const debounceWindow = 1 * time.Second
+	// Debounce window can be configured via SCHEDULER_DEBOUNCE_WINDOW_SECOND env var (default: 10 seconds)
+	debounceWindow := time.Duration(binding.EnvSchedulerDebounceWindowSecond) * time.Second
 	if lastScheduleTimeStr, exists := oldBinding.Annotations[util.LastScheduleTimeAnnotation]; exists {
 		if lastScheduleTime, err := time.Parse(time.RFC3339Nano, lastScheduleTimeStr); err == nil {
 			timeSinceLastSchedule := time.Since(lastScheduleTime)
