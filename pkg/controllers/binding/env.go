@@ -71,7 +71,7 @@ var EnvEnableDelayedScalingAllTestNamespace bool = GetEnvDefaultBool("ENABLE_DEL
 
 var EnvDelayedScalingTimeoutSecond int = GetEnvDefaultInt("DELAYED_SCALING_TIMEOUT_SECOND", 300)
 
-var EnvDelayedScalingSleepDurationSecond int = GetEnvDefaultInt("DELAYED_SCALING_SLEEP_DURATION_SECOND", 20)
+var EnvDelayedScalingSleepDurationSecond int = GetEnvDefaultInt("DELAYED_SCALING_SLEEP_DURATION_SECOND", 15)
 
 var EnvScaleUpThresholdRatio float64 = GetEnvDefaultFloat("SCALE_UP_THRESHOLD_RATIO", 0.5)
 
