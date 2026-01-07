@@ -497,7 +497,6 @@ func getMaxReplicas(resourceInterpreter resourceinterpreter.ResourceInterpreter,
 }
 
 func getMinMaxReplicasFromResourceTemplate(workload *unstructured.Unstructured) (int, int, error) {
-	klog.Infof("Processing workload for %s/%s: %+v", workload.GetNamespace(), workload.GetName(), workload)
 
 	workloadObj := workload.Object
 	if workloadObj == nil {
@@ -588,6 +587,10 @@ func recordBeginAvailableReplicas(gocache *gocache.Cache, karmadaSearchCli *SKar
 	for i := range targetClusters {
 
 		targetCluster := targetClusters[i]
+		if targetCluster.ReplicaChangeStatus == workv1alpha2.ReplicaChangeStatusStable ||
+			targetCluster.ReplicaChangeStatus == workv1alpha2.ReplicaChangeStatusUnknown {
+			continue
+		}
 		clusterName := targetCluster.Name
 		currentAvailableReplicas := clusterAvailableReplicasMap[clusterName]
 
