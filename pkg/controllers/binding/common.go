@@ -18,6 +18,7 @@ package binding
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -81,7 +82,6 @@ func ensureWork(
 			return err
 		}
 	}
-	klog.Infof("ensure work for %s/%s in cluster %v", workload.GetNamespace(), workload.GetName(), targetClusters)
 
 	// Create error channel to collect errors from goroutines
 	errChan := make(chan error, len(targetClusters))
@@ -94,14 +94,14 @@ func ensureWork(
 			go func(targetCluster workv1alpha2.TargetCluster, i int) {
 				if err := processEnsureWorkWithRetry(cache, mem, client, karmadaSearchCli, resourceInterpreter, workload,
 					overrideManager, binding, scope, targetCluster, placement, replicas,
-					jobCompletions, i, conflictResolutionInBinding); err != nil {
+					jobCompletions, i, conflictResolutionInBinding, targetClusters); err != nil {
 					klog.Errorf("ensure work with retry gortinue for %s/%s in cluster %s failed: %v", workload.GetNamespace(), workload.GetName(), targetCluster.Name, err)
 					errChan <- err
 				}
 			}(targetCluster, i)
 		} else {
 			if err := processEnsureWork(client, resourceInterpreter, workload, overrideManager, binding, scope, targetCluster, placement, replicas,
-				jobCompletions, i, conflictResolutionInBinding); err != nil {
+				jobCompletions, i, conflictResolutionInBinding, targetClusters); err != nil {
 				return err
 			}
 		}
@@ -117,7 +117,7 @@ type CancelableTask struct {
 func processEnsureWorkWithRetry(cache *gocache.Cache, mem *sync.Map, client client.Client, karmadaSearchCli *SKarmadaSearch, resourceInterpreter resourceinterpreter.ResourceInterpreter,
 	workload *unstructured.Unstructured, overrideManager overridemanager.OverrideManager, binding metav1.Object, scope apiextensionsv1.ResourceScope,
 	targetCluster workv1alpha2.TargetCluster, placement *policyv1alpha1.Placement, replicas int32,
-	jobCompletions []workv1alpha2.TargetCluster, idx int, conflictResolutionInBinding policyv1alpha1.ConflictResolution) error {
+	jobCompletions []workv1alpha2.TargetCluster, idx int, conflictResolutionInBinding policyv1alpha1.ConflictResolution, targetClusters []workv1alpha2.TargetCluster) error {
 
 	defer func() {
 		key := fmt.Sprintf("%s-%s-%s", targetCluster.Name, workload.GetNamespace(), workload.GetName())
@@ -177,7 +177,7 @@ func processEnsureWorkWithRetry(cache *gocache.Cache, mem *sync.Map, client clie
 			klog.Infof("ensure work retry gortinue ensureWork for %s/%s in cluster %s %v timeout\n",
 				workload.GetNamespace(), workload.GetName(), targetCluster.Name, time.Duration(EnvDelayedScalingTimeoutSecond)*time.Second)
 			return processEnsureWork(client, resourceInterpreter, workload, overrideManager, binding, scope,
-				targetCluster, placement, replicas, jobCompletions, idx, conflictResolutionInBinding)
+				targetCluster, placement, replicas, jobCompletions, idx, conflictResolutionInBinding, targetClusters)
 		default:
 			if !reached {
 				klog.Infof("ensure work retry gortinue ensureWork for %s/%s in cluster %s not reach, try %d times, still waiting...\n",
@@ -186,7 +186,7 @@ func processEnsureWorkWithRetry(cache *gocache.Cache, mem *sync.Map, client clie
 				klog.Infof("ensure work retry gortinue ensureWork for %s/%s in cluster %s has reached, going to distribute!!!!\n",
 					workload.GetNamespace(), workload.GetName(), targetCluster.Name)
 				return processEnsureWork(client, resourceInterpreter, workload, overrideManager, binding, scope,
-					targetCluster, placement, replicas, jobCompletions, idx, conflictResolutionInBinding)
+					targetCluster, placement, replicas, jobCompletions, idx, conflictResolutionInBinding, targetClusters)
 			}
 			sleepTimer := time.NewTimer(time.Duration(EnvDelayedScalingSleepDurationSecond) * time.Second)
 			select {
@@ -236,6 +236,7 @@ func processEnsureWork(
 	overrideManager overridemanager.OverrideManager, binding metav1.Object, scope apiextensionsv1.ResourceScope,
 	targetCluster workv1alpha2.TargetCluster, placement *policyv1alpha1.Placement, replicas int32,
 	jobCompletions []workv1alpha2.TargetCluster, idx int, conflictResolutionInBinding policyv1alpha1.ConflictResolution,
+	targetclusters []workv1alpha2.TargetCluster,
 ) error {
 	klog.Infof("ensure work for %s/%s in cluster %s", workload.GetNamespace(), workload.GetName(), targetCluster.Name)
 
@@ -246,6 +247,15 @@ func processEnsureWork(
 	// add cluster name to the workload's annotation
 	util.MergeAnnotation(clonedWorkload, util.ClusterNameAnnotation, targetCluster.Name)
 
+	// Serialize targetClusters to JSON and add to workload's annotation
+	if len(targetclusters) > 0 {
+		targetClustersBytes, err := json.Marshal(targetclusters)
+		if err != nil {
+			klog.Errorf("Failed to marshal targetClusters for %s/%s, err is: %v", workload.GetNamespace(), workload.GetName(), err)
+		} else {
+			util.MergeAnnotation(clonedWorkload, util.ClusterReplicaChangeStatusAnnotation, string(targetClustersBytes))
+		}
+	}
 	// If and only if the resource template has replicas, and the replica scheduling policy is divided,
 	// we need to revise replicas.
 	if needReviseReplicas(replicas, placement) {

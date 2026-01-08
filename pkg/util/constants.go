@@ -107,6 +107,8 @@ const (
 
 	// ClusterNameAnnotation is added to Workload to specify the cluster name associated with the Work.
 	ClusterNameAnnotation = "policy.karmada.io/cluster-name"
+
+	ClusterReplicaChangeStatusAnnotation = "policy.karmada.io/cluster-replicas"
 )
 
 // Define finalizers used by karmada system.
