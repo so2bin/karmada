@@ -61,7 +61,7 @@ func SyncReplicasProgressMapToCache(goCache *gocache.Cache, namespace, name stri
 	goCache.Set(key, progress, defaultRsourceBingdingControllerCacheExpiration)
 	var progressStatus string
 	for cluster, progress := range progress {
-		progressStatus += fmt.Sprintf("\ncluster %s progress: %+v; ", cluster, *progress)
+		progressStatus += fmt.Sprintf("cluster %s progress: %+v; ", cluster, *progress)
 	}
 	klog.Infof("Sync replicas progress map to go cache for workload %s/%s: %s", namespace, name, progressStatus)
 }
@@ -85,13 +85,22 @@ func GetReplicasProgressFromCache(goCache *gocache.Cache, namespace, name string
 	return progress, nil
 }
 
+// IsOtherReachScaleUpThreshold checks if it's safe to proceed with scaling operations for the current cluster.
+//
+// This function determines whether other clusters have completed their scale-up operations enough
+// to allow the current cluster to proceed with its scaling (typically scale-down).
+//
+// Return true (safe to proceed) when:
+// 1. No clusters are scaling up (all are stable or scaling down)
+// 2. All scaling down clusters have 0 current replicas (already scaled down)
+// 3. Any scaling up cluster (including current if it's the only one) has reached threshold
+//
+// Return false (wait) when:
+// - There are scaling up clusters but none have reached the threshold yet
 func IsOtherReachScaleUpThreshold(goCache *gocache.Cache, karmadaSearchCli *SKarmadaSearch, currCluster, namespace, name string) (bool, error) {
-	isHasScalingUpCluster := false
-	scalingUpClusters := []string{}
-	scalingDownClusters := []string{}
-	allScalingDownReplicasZero := true
-
 	name = GetDeploymentName(name)
+
+	// Step 1: Get cached progress and latest cluster status
 	progressMap, err := GetReplicasProgressFromCache(goCache, namespace, name)
 	if err != nil {
 		return false, fmt.Errorf("failed to get replicas progress from cache: %w", err)
@@ -106,66 +115,108 @@ func IsOtherReachScaleUpThreshold(goCache *gocache.Cache, karmadaSearchCli *SKar
 	if err != nil {
 		return false, fmt.Errorf("failed to get cluster available replicas: %w", err)
 	}
-	klog.Infof("Success get deployments from karmadaSearch for %s/%s took %v, latestClusterAvailableReplicasMap: %+v", namespace, name, time.Since(startTime), latestClusterAvailableReplicasMap)
+	klog.Infof("Retrieved deployments from KarmadaSearch for %s/%s in %v, available replicas: %+v",
+		namespace, name, time.Since(startTime), latestClusterAvailableReplicasMap)
 
-	// First pass: collect scaling down clusters and check if all their replicas are zero
-	for cluster, progress := range progressMap {
-		availableReplicas, ok := latestClusterAvailableReplicasMap[cluster]
-		if ok {
+	// Step 2: Update progress and collect scaling up/down clusters
+	var scalingUpClusters []string
+	var scalingDownClusters []string
+	for clusterName, progress := range progressMap {
+		// Update current available replicas
+		if availableReplicas, ok := latestClusterAvailableReplicasMap[clusterName]; ok {
 			progress.CurrentAvailableReplicas = availableReplicas
+			progress.LastUpdate = time.Now()
 		}
 
-		if progress.ReplicasChangeStatus == workv1alpha2.ReplicaChangeStatusScalingDown {
-			scalingDownClusters = append(scalingDownClusters, cluster)
-			if progress.CurrentAvailableReplicas != 0 {
-				allScalingDownReplicasZero = false
-			}
+		// Collect scaling up and down clusters
+		if progress.ReplicasChangeStatus == workv1alpha2.ReplicaChangeStatusScalingUp {
+			scalingUpClusters = append(scalingUpClusters, clusterName)
+		} else if progress.ReplicasChangeStatus == workv1alpha2.ReplicaChangeStatusScalingDown {
+			scalingDownClusters = append(scalingDownClusters, clusterName)
 		}
-		progressMap[cluster] = progress
 	}
 
-	// If all scaling down clusters have zero replicas, return true
-	if len(scalingDownClusters) > 0 && allScalingDownReplicasZero {
-		klog.Infof("ensure work retry goroutine for %s/%s/%s all scaling down clusters %v have zero replicas, return true",
-			currCluster, namespace, name, scalingDownClusters)
-		SyncReplicasProgressMapToCache(goCache, namespace, name, progressMap)
+	// Always sync progress back to cache
+	defer SyncReplicasProgressMapToCache(goCache, namespace, name, progressMap)
+
+	// Step 3: No scaling up clusters - safe to proceed
+	if len(scalingUpClusters) == 0 {
+		klog.Infof("Cluster %s/%s/%s: No clusters are scaling up, allowing operation to proceed, return true",
+			currCluster, namespace, name)
 		return true, nil
 	}
 
-	// Second pass: check scaling up clusters
-	for cluster, progress := range progressMap {
-		if cluster == currCluster {
+	// Step 3.5: All scaling down clusters have 0 replicas - safe to proceed
+	if len(scalingDownClusters) > 0 {
+		allScaledDown := true
+		for _, clusterName := range scalingDownClusters {
+			if progressMap[clusterName].CurrentAvailableReplicas > 0 {
+				allScaledDown = false
+				break
+			}
+		}
+		if allScaledDown {
+			klog.Infof("Cluster %s/%s/%s: All scaling down clusters %v have 0 replicas (already scaled down), allowing operation to proceed, return true",
+				currCluster, namespace, name, scalingDownClusters)
+			return true, nil
+		}
+	}
+
+	// Step 4: Check if any scaling up cluster has reached threshold
+	// For single cluster scaling: check the current cluster itself
+	// For multi-cluster scaling: check other clusters (excluding current)
+	shouldCheckCurrent := len(scalingUpClusters) == 1
+
+	for _, clusterName := range scalingUpClusters {
+		// Skip current cluster if there are multiple scaling up clusters
+		if clusterName == currCluster && !shouldCheckCurrent {
+			klog.Infof("Cluster %s/%s/%s: Skipping current cluster check (multi-cluster scaling)",
+				currCluster, namespace, name)
 			continue
 		}
 
-		if progress.ReplicasChangeStatus == workv1alpha2.ReplicaChangeStatusScalingUp {
-			scalingUpClusters = append(scalingUpClusters, cluster)
-			isHasScalingUpCluster = true
-			// Check if available replicas reached threshold ratio of target replicas (not final min replicas)
-			// This ensures we wait for actual scale up completion, not just minimum threshold
-			// Condition 1: Threshold ratio can be configured via SCALE_UP_THRESHOLD_RATIO env var (default: 0.5)
-			// Condition 2: Current replicas >= BeginAvailableReplicas + 1
-			// Either condition can trigger the threshold
-			threshold := int(math.Ceil(float64(progress.FinalMinReplicas) * EnvScaleUpThresholdRatio))
-			incrementThreshold := progress.BeginAvailableReplicas + 1
-			if progress.CurrentAvailableReplicas >= threshold || progress.CurrentAvailableReplicas >= incrementThreshold {
-				klog.Infof("ensure work retry goroutine for %s/%s/%s is scaling up, current available replicas: %d, final min replicas: %d, threshold (%.0f%%): %d, increment threshold (begin+1): %d, ensure work retry goroutine will reached scale up threshold",
-					currCluster, namespace, name, progress.CurrentAvailableReplicas, progress.FinalMinReplicas, EnvScaleUpThresholdRatio*100, threshold, incrementThreshold)
-				return true, nil
-			} else {
-				klog.Infof("ensure work retry goroutine for %s/%s/%s is scaling up but not reached threshold yet, current: %d, final min replicas: %d, threshold (%.0f%%): %d, increment threshold (begin+1): %d",
-					cluster, namespace, name, progress.CurrentAvailableReplicas, progress.FinalMinReplicas, EnvScaleUpThresholdRatio*100, threshold, incrementThreshold)
-			}
+		progress := progressMap[clusterName]
+		reached, reason := checkScaleUpThreshold(progress)
+
+		if reached {
+			klog.Infof("Cluster %s/%s/%s: Scale up threshold reached in %s, %s, return true",
+				currCluster, namespace, name, clusterName, reason)
+			return true, nil
 		}
+
+		klog.Infof("Cluster %s/%s/%s: Cluster %s has not reached threshold yet, %s",
+			currCluster, namespace, name, clusterName, reason)
 	}
-	SyncReplicasProgressMapToCache(goCache, namespace, name, progressMap)
-	if !isHasScalingUpCluster {
-		klog.Infof("%s/%s/%s no other cluster is scaling up, return true", currCluster, namespace, name)
-		for cluster, progress := range progressMap {
-			klog.Infof("%s/%s/%s no other cluster is scaling up, return true, cluster %s progress: %+v", currCluster, namespace, name, cluster, *progress)
-		}
-		return true, nil
-	}
-	klog.Infof("%s/%s/%s is scaling up in cluster %v but not reach scale up threshold, return false", currCluster, namespace, name, scalingUpClusters)
+
+	// Step 5: Scaling up clusters exist but none reached threshold
+	klog.Infof("Cluster %s/%s/%s: Waiting for scaling up clusters %v to reach threshold, return false",
+		currCluster, namespace, name, scalingUpClusters)
 	return false, nil
+}
+
+// checkScaleUpThreshold determines if a cluster has reached the scale-up threshold.
+// Returns (reached bool, reason string) explaining the result.
+func checkScaleUpThreshold(progress *ExpansionProgress) (bool, string) {
+	// Calculate percentage-based threshold (configured via SCALE_UP_THRESHOLD_RATIO)
+	percentageThreshold := int(math.Ceil(float64(progress.FinalMinReplicas) * EnvScaleUpThresholdRatio))
+
+	// Calculate increment-based threshold (at least 1 more replica)
+	incrementThreshold := progress.BeginAvailableReplicas + 1
+
+	current := progress.CurrentAvailableReplicas
+
+	// Check if either threshold is met
+	if current >= percentageThreshold {
+		return true, fmt.Sprintf("current replicas %d >= percentage threshold %d (%.0f%% of %d)",
+			current, percentageThreshold, EnvScaleUpThresholdRatio*100, progress.FinalMinReplicas)
+	}
+
+	if current >= incrementThreshold {
+		return true, fmt.Sprintf("current replicas %d >= increment threshold %d (begin %d + 1)",
+			current, incrementThreshold, progress.BeginAvailableReplicas)
+	}
+
+	// Threshold not reached
+	return false, fmt.Sprintf("current replicas %d < thresholds (percentage: %d, increment: %d)",
+		current, percentageThreshold, incrementThreshold)
 }

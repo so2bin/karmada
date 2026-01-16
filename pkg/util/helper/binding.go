@@ -514,7 +514,7 @@ func IsReplicaDistributionUnchanged(oldTargetClusters, newTargetClusters []workv
 	return true
 }
 
-func PatchClusterReplicas(oldTargetClusters, newTargetClusters []workv1alpha2.TargetCluster) {
+func PatchClusterReplicasStatus(oldTargetClusters, newTargetClusters []workv1alpha2.TargetCluster) {
 	// Calculate total replicas
 	var oldTotal, newTotal int32
 	for _, cluster := range oldTargetClusters {

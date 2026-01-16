@@ -141,7 +141,7 @@ func (c *ResourceBindingController) syncBinding(binding *workv1alpha2.ResourceBi
 	}
 	start := time.Now()
 
-	if isEnableDelayedScalingNs(workload.GetNamespace()) && isAtmsNodeCmName(workload.GetName()) {
+	if IsEnableDelayedScalingNs(workload.GetNamespace()) && IsAtmsNodeCmName(workload.GetName()) {
 		err = recordBeginAvailableReplicas(c.GoCache, c.KarmadaSearchCli, c.ResourceInterpreter, workload, binding, apiextensionsv1.NamespaceScoped)
 		if err != nil {
 			klog.Errorf("recordBeginAvailableReplicas error: %v", err)

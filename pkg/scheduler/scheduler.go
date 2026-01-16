@@ -359,7 +359,12 @@ func (s *Scheduler) doScheduleBinding(namespace, name string) (err error) {
 		metrics.BindingSchedule(string(ReconcileSchedule), utilmetrics.DurationInSeconds(start), err)
 		return err
 	}
-	if util.IsBindingReplicasChanged(&rb.Spec, rb.Spec.Placement.ReplicaScheduling) {
+	// NOTE:这里的bindingSpec.Clusters实际对应着atms返回的集群权重
+	// rb.spec.bindingSpec.Replicas实际对应着webhook中返回的replicas，实际上是推理crd中keda的maxReplicas
+	// 因此如果集群权重和与rb.spec.bindingSpec.Replicas基本上永远不相等，会导致重调度
+	// 所以推理CRD不需要通过判断副本数变化来触发重调度，创建workloadrebalance时，会explicitly triggered reschedule
+	if !(binding.IsAtmsNodeCmName(rb.GetName())) &&
+		util.IsBindingReplicasChanged(&rb.Spec, rb.Spec.Placement.ReplicaScheduling) {
 		// binding replicas changed, need reschedule
 		klog.Infof("Reschedule ResourceBinding(%s/%s) as replicas scaled down or scaled up", namespace, name)
 		err = s.scheduleResourceBinding(rb)
@@ -592,7 +597,7 @@ func (s *Scheduler) patchScheduleResultForResourceBinding(oldBinding *workv1alph
 
 	// Check if within debounce time window and replica distribution unchanged
 	// IMPORTANT: Check this BEFORE calling PatchClusterReplicas to prevent state modification
-	// Debounce window can be configured via SCHEDULER_DEBOUNCE_WINDOW_SECOND env var (default: 10 seconds)
+	// Debounce window can be configured via SCHEDULER_DEBOUNCE_WINDOW_SECOND env var (default: 45 seconds)
 	debounceWindow := time.Duration(binding.EnvSchedulerDebounceWindowSecond) * time.Second
 	if lastScheduleTimeStr, exists := oldBinding.Annotations[util.LastScheduleTimeAnnotation]; exists {
 		if lastScheduleTime, err := time.Parse(time.RFC3339Nano, lastScheduleTimeStr); err == nil {
@@ -600,7 +605,7 @@ func (s *Scheduler) patchScheduleResultForResourceBinding(oldBinding *workv1alph
 			if timeSinceLastSchedule < debounceWindow {
 				// Within debounce window, check if replica distribution is unchanged
 				if helper.IsReplicaDistributionUnchanged(oldBinding.Spec.Clusters, scheduleResult) {
-					klog.Infof("Skip scheduling for %s/%s: within debounce window (%v < %v) and replica distribution unchanged, keep existing status",
+					klog.Infof("Skip PatchClusterReplicasStatus for %s/%s: within debounce window (%v < %v) and replica distribution unchanged, keep existing status",
 						oldBinding.GetNamespace(), oldBinding.GetName(), timeSinceLastSchedule, debounceWindow)
 					return nil
 				}
@@ -608,11 +613,11 @@ func (s *Scheduler) patchScheduleResultForResourceBinding(oldBinding *workv1alph
 		}
 	}
 
-	klog.Infof("Before PatchClusterReplicas for %s/%s: oldBinding.Spec.Clusters=%v, scheduleResult=%v",
+	klog.Infof("Before PatchClusterReplicasStatus for %s/%s: oldBinding.Spec.Clusters=%v, scheduleResult=%v",
 		oldBinding.GetNamespace(), oldBinding.GetName(), oldBinding.Spec.Clusters, scheduleResult)
 
-	helper.PatchClusterReplicas(oldBinding.Spec.Clusters, scheduleResult)
-	klog.Infof("After PatchClusterReplicas for %s/%s: scheduleResult=%v",
+	helper.PatchClusterReplicasStatus(oldBinding.Spec.Clusters, scheduleResult)
+	klog.Infof("After PatchClusterReplicasStatus for %s/%s: scheduleResult=%v",
 		oldBinding.GetNamespace(), oldBinding.GetName(), scheduleResult)
 
 	newBinding.Spec.Clusters = scheduleResult
@@ -767,16 +772,19 @@ func (s *Scheduler) patchScheduleResultForClusterResourceBinding(oldBinding *wor
 			if timeSinceLastSchedule < debounceWindow {
 				// Within debounce window, check if replica distribution is unchanged
 				if helper.IsReplicaDistributionUnchanged(oldBinding.Spec.Clusters, scheduleResult) {
-					klog.Infof("Skip scheduling for ClusterResourceBinding %s: within debounce window (%v < %v) and replica distribution unchanged, keep existing status",
-						oldBinding.Name, timeSinceLastSchedule, debounceWindow)
+					klog.Infof("Skip PatchClusterReplicasStatus for %s/%s: within debounce window (%v < %v) and replica distribution unchanged, keep existing status",
+						oldBinding.GetNamespace(), oldBinding.GetName(), timeSinceLastSchedule, debounceWindow)
 					return nil
 				}
 			}
 		}
 	}
 
-	helper.PatchClusterReplicas(oldBinding.Spec.Clusters, scheduleResult)
-	klog.Infof("after add cluster replica change status for ClusterResourceBinding %s scheduleResult: %v", oldBinding.Name, scheduleResult)
+	klog.Infof("Before PatchClusterReplicasStatus for %s/%s: oldBinding.Spec.Clusters=%v, scheduleResult=%v",
+		oldBinding.GetNamespace(), oldBinding.GetName(), oldBinding.Spec.Clusters, scheduleResult)
+	helper.PatchClusterReplicasStatus(oldBinding.Spec.Clusters, scheduleResult)
+	klog.Infof("After PatchClusterReplicasStatus for %s/%s: scheduleResult=%v",
+		oldBinding.GetNamespace(), oldBinding.GetName(), scheduleResult)
 
 	newBinding.Spec.Clusters = scheduleResult
 	// Update last schedule time
