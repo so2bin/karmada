@@ -75,4 +75,4 @@ var EnvDelayedScalingSleepDurationSecond int = GetEnvDefaultInt("DELAYED_SCALING
 
 var EnvScaleUpThresholdRatio float64 = GetEnvDefaultFloat("SCALE_UP_THRESHOLD_RATIO", 0.5)
 
-var EnvSchedulerDebounceWindowSecond int = GetEnvDefaultInt("SCHEDULER_DEBOUNCE_WINDOW_SECOND", 45)
+var EnvSchedulerDebounceWindowSecond int = GetEnvDefaultInt("SCHEDULER_DEBOUNCE_WINDOW_SECOND", 15)

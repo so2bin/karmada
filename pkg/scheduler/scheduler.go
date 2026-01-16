@@ -359,7 +359,11 @@ func (s *Scheduler) doScheduleBinding(namespace, name string) (err error) {
 		metrics.BindingSchedule(string(ReconcileSchedule), utilmetrics.DurationInSeconds(start), err)
 		return err
 	}
-	if !(binding.IsEnableDelayedScalingNs(rb.GetNamespace()) && binding.IsAtmsNodeCmName(rb.GetName())) &&
+	// NOTE:这里的bindingSpec.Clusters实际对应着atms返回的集群权重
+	// rb.spec.bindingSpec.Replicas实际对应着webhook中返回的replicas，实际上是推理crd中keda的maxReplicas
+	// 因此如果集群权重和与rb.spec.bindingSpec.Replicas基本上永远不相等，会导致重调度
+	// 所以推理CRD不需要通过判断副本数变化来触发重调度，创建workloadrebalance时，会explicitly triggered reschedule
+	if !(binding.IsAtmsNodeCmName(rb.GetName())) &&
 		util.IsBindingReplicasChanged(&rb.Spec, rb.Spec.Placement.ReplicaScheduling) {
 		// binding replicas changed, need reschedule
 		klog.Infof("Reschedule ResourceBinding(%s/%s) as replicas scaled down or scaled up", namespace, name)
