@@ -87,7 +87,7 @@ func ensureWork(
 	errChan := make(chan error, len(targetClusters))
 	for i := range targetClusters {
 		targetCluster := targetClusters[i]
-		if isEnableDelayedScalingNs(workload.GetNamespace()) && isAtmsNodeCmName(workload.GetName()) &&
+		if IsEnableDelayedScalingNs(workload.GetNamespace()) && IsAtmsNodeCmName(workload.GetName()) &&
 			cache != nil && targetCluster.ReplicaChangeStatus == workv1alpha2.ReplicaChangeStatusScalingDown &&
 			!isFixedReplicasToZeroFromResourceInterpreter(resourceInterpreter, workload) {
 
@@ -238,7 +238,8 @@ func processEnsureWork(
 	jobCompletions []workv1alpha2.TargetCluster, idx int, conflictResolutionInBinding policyv1alpha1.ConflictResolution,
 	targetclusters []workv1alpha2.TargetCluster,
 ) error {
-	klog.Infof("ensure work for %s/%s in cluster %s", workload.GetNamespace(), workload.GetName(), targetCluster.Name)
+	klog.Infof("ensure work for %s/%s in cluster %s, replicaChangeStatus=%s, replicas=%d, processEnsureWork called", workload.GetNamespace(),
+		workload.GetName(), targetCluster.Name, targetCluster.ReplicaChangeStatus, targetCluster.Replicas)
 
 	var err error
 	clonedWorkload := workload.DeepCopy()
@@ -434,7 +435,7 @@ func needReviseReplicas(replicas int32, placement *policyv1alpha1.Placement) boo
 	return replicas > 0 && placement != nil && placement.ReplicaSchedulingType() == policyv1alpha1.ReplicaSchedulingTypeDivided
 }
 
-func isEnableDelayedScalingNs(ns string) bool {
+func IsEnableDelayedScalingNs(ns string) bool {
 	if EnvEnableDelayedScalingAllTestNamespace && strings.HasSuffix(ns, "-test") {
 		klog.Infof("ns: %s is test namespace, EnvEnableDelayedScalingAllTestNamespace is %v, return true", ns, EnvEnableDelayedScalingAllTestNamespace)
 		return true
@@ -450,7 +451,7 @@ func isEnableDelayedScalingNs(ns string) bool {
 	return false
 }
 
-func isAtmsNodeCmName(name string) bool {
+func IsAtmsNodeCmName(name string) bool {
 	return strings.HasPrefix(name, ATMSNodeCmPrefix)
 }
 
@@ -641,7 +642,6 @@ func recordBeginAvailableReplicas(gocache *gocache.Cache, karmadaSearchCli *SKar
 	for cluster, progress := range replicasProgressMap {
 		progressStatus += fmt.Sprintf("cluster %s progress: %+v; ", cluster, *progress)
 	}
-	klog.Infof("Sync begin replicas progress map to go cache for %s/%s: %s", workload.GetNamespace(), workload.GetName(), progressStatus)
 	SyncReplicasProgressMapToCache(gocache, workload.GetNamespace(), workload.GetName(), replicasProgressMap)
 	return nil
 }

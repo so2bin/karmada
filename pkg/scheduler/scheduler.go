@@ -359,7 +359,8 @@ func (s *Scheduler) doScheduleBinding(namespace, name string) (err error) {
 		metrics.BindingSchedule(string(ReconcileSchedule), utilmetrics.DurationInSeconds(start), err)
 		return err
 	}
-	if util.IsBindingReplicasChanged(&rb.Spec, rb.Spec.Placement.ReplicaScheduling) {
+	if !(binding.IsEnableDelayedScalingNs(rb.GetNamespace()) && binding.IsAtmsNodeCmName(rb.GetName())) &&
+		util.IsBindingReplicasChanged(&rb.Spec, rb.Spec.Placement.ReplicaScheduling) {
 		// binding replicas changed, need reschedule
 		klog.Infof("Reschedule ResourceBinding(%s/%s) as replicas scaled down or scaled up", namespace, name)
 		err = s.scheduleResourceBinding(rb)
