@@ -555,8 +555,12 @@ func PatchClusterReplicasStatus(oldTargetClusters, newTargetClusters []workv1alp
 	for i, newCluster := range newTargetClusters {
 		oldReplicas, exists := oldClustersMap[newCluster.Name]
 		if !exists {
-			// New cluster that didn't exist before
-			newTargetClusters[i].ReplicaChangeStatus = workv1alpha2.ReplicaChangeStatusScalingUp
+			if newTargetClusters[i].Replicas > 0 {
+				// New cluster that didn't exist before
+				newTargetClusters[i].ReplicaChangeStatus = workv1alpha2.ReplicaChangeStatusScalingUp
+			} else {
+				newTargetClusters[i].ReplicaChangeStatus = workv1alpha2.ReplicaChangeStatusStable
+			}
 			continue
 		}
 
